@@ -45,8 +45,8 @@ def sort_data(df,fluxfreq):
     if not np.any(years_df['seasons']):
         print 'No years with sufficient data for evaluation. Exiting...'
         sys.exit()
-    elif not np.all(years_df['seasons']):
-        exclude_years_list=years_df[years_df['seasons']==0].index.tolist()
+    elif not np.all(years_df['seasons']) or np.any(years_df['seasons']<=0):
+        exclude_years_list=years_df[years_df['seasons']<=0].index.tolist()
         exclude_years_str= ','.join(map(str,exclude_years_list))
         print 'Insufficient data for evaluation in the following years: '+exclude_years_str+' (excluded from analysis)'
         years_df=years_df[years_df['seasons']>0]
@@ -56,7 +56,6 @@ def sort_data(df,fluxfreq):
         seasons_df=pd.concat([pd.concat([df.ix[str(i)].iloc[j*(bin_size/2):j*(bin_size/2)+bin_size].sort('Ta',axis=0) 
                                         for j in xrange(years_df['seasons'].ix[i])]) for i in years_df.index])
     except:
-        pdb.set_trace()
         raise StandardError
         
     

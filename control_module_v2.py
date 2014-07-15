@@ -6,19 +6,19 @@ import syst_error_v26 as syst_error
 ###### Constants ######
 
 rad_threshold=10
-bootstrap_n=100
+bootstrap_n=10
 
 
 ###### File IO ######
 
-file_in_path='C:\Users\imchugh\Dropbox\Data\Site data processing\Whroo\Advanced'
-file_in_name='Advanced_processed_data_Whroo_v11c.csv'
+file_in_path='C:\Offline_data_processing\Data\Whroo\EC data'
+file_in_name='temp.csv'
 file_out_path='C:\Temp'
 
 
 ###### Variable names ######
 
-CfluxName='Fc'          # CO2
+CfluxName='Fc_stor'     # CO2
 tempName='Ta'           # Air temperature
 ustarName='ustar'       # u*
 radName='Fsd_Con'       # Incoming shortwave radiation
@@ -33,7 +33,7 @@ model_error=True
 
 ###### Miscellaneous ######
 
-fluxfreq=10
+fluxfreq=30
 
 
 ###### Main program ######

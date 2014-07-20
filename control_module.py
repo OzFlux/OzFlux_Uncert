@@ -10,6 +10,7 @@ import netCDF4
 
 # Custom module imports
 import ustar_threshold as ustar
+import random_error
 
 # Ingest data from the netCDF file
 def get_nc(file_in):
@@ -104,3 +105,17 @@ if process_ustar:
 #------------------------------------------------------------------------------#
 ### random error 
 
+if process_random:
+	
+	# Set variable names
+	CfluxName=cf['variable_names']['random_error']['carbon_flux']
+	TaName=cf['variable_names']['random_error']['temperature']
+	windspdName=cf['variable_names']['random_error']['wind_speed']
+	radName=cf['variable_names']['random_error']['solar_radiation']
+
+	# Subset the df and create new column names
+	sub_df=df[[CfluxName,TaName,windspdName,radName]]
+	sub_df.columns=['Fc','Ta','ws','Fsd']
+	
+	# Go do it
+	random_results=

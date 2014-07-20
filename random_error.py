@@ -12,52 +12,24 @@ import matplotlib.mlab as mlab
 
 # Hollinger, D.Y., Richardson, A.D., 2005. Uncertainty in eddy covariance measurements and its application to physiological models. Tree Physiol. 25, 873–885.
 
-###### Constants ######
 
-n=10**4
-light_threshold=10
-rad_threshold=36            #Set to 75umol photons PAR or 36Wm-2 full solar spectrum
-rad_filter_val=4
-temp_threshold=3            #Set to 3oC
-temp_filter_val=4
-wind_threshold=1            #Set to 1ms-1
-wind_filter_val=4
-Cflux_filter_val=4
-num_classes=40
-fluxfreq='30Min'
-
-radName='Fsd'               #Name for solar radiation
-radQCName='Fsd_QCFlag'      #Name for solar radiation
-tempName='Ta'               #Name for temperature
-tempQCName='Ta_QCFlag'      #Name for temperature QC flag
-windName='Ws_CSAT'          #Name for wind
-windQCName='Ws_CSAT_QCFlag' #Name for wind QC flag
-CfluxName='Fc'              #Name for C flux
-CfluxQCName='Fc_QCFlag'     #Name for C flux QC flag
-CpropName='Fc_NN'           #Name for error propagation series
-Cunits='umol m-2 s-1'       #Units of C flux
-
-file_in_path='C:\Temp'
-file_in_name='Advanced_processed_data_HowardSprings_v11b.csv'
-file_out_path='C:\Temp'
-file_out_name='Random error.csv'
 
 ###### Functions ######
 
 # Calculate tuple differences
 def paired_differences():
     diff_df=pd.DataFrame({'flux_err':np.nan,'flux_mean':np.nan},index=df.index)[:len(df)-recs_day]
-    for i in xrange(0,len(df)-recs_day):
-        rad_diff=abs(df[radName].iloc[i]-df[radName].iloc[i+recs_day])
-        temp_diff=abs(df[tempName].iloc[i]-df[tempName].iloc[i+recs_day])
-        wind_diff=abs(df[windName].iloc[i]-df[windName].iloc[i+recs_day])
-        if rad_diff<rad_threshold and temp_diff<temp_threshold and wind_diff<wind_threshold:
-            diff_df['flux_err'][i]=(df[CfluxName][i]-df[CfluxName][i+recs_day])/np.sqrt(2)
-            diff_df['flux_mean'][i]=(df[CfluxName][i]+df[CfluxName][i+recs_day])/2
-    diff_df=diff_df.dropna(how='any',axis=0)
-    hist_S=copy.copy(diff_df['flux_err'])
-    diff_df['flux_err']=abs(diff_df['flux_err'])
-    return diff_df,hist_S
+    # for i in xrange(0,len(df)-recs_day):
+        # rad_diff=abs(df[radName].iloc[i]-df[radName].iloc[i+recs_day])
+        # temp_diff=abs(df[tempName].iloc[i]-df[tempName].iloc[i+recs_day])
+        # wind_diff=abs(df[windName].iloc[i]-df[windName].iloc[i+recs_day])
+        # if rad_diff<rad_threshold and temp_diff<temp_threshold and wind_diff<wind_threshold:
+            # diff_df['flux_err'][i]=(df[CfluxName][i]-df[CfluxName][i+recs_day])/np.sqrt(2)
+            # diff_df['flux_mean'][i]=(df[CfluxName][i]+df[CfluxName][i+recs_day])/2
+    # diff_df=diff_df.dropna(how='any',axis=0)
+    # hist_S=copy.copy(diff_df['flux_err'])
+    # diff_df['flux_err']=abs(diff_df['flux_err'])
+    # return diff_df,hist_S
 
 def random_sample_laplace(df):
     crit_t=stats.t.isf(0.025,len(df)) #Calculate critical t-value for p=0.095
@@ -145,52 +117,58 @@ def linear_plot():
 def random_error(df,records_per_day):
             
 	# Do the paired difference analysis (drop all cases containing any NaN)
-	diff_df,hist_S=paired_differences()                                                
+	diff_df=pd.DataFrame({'Fc':df['Fc']-df['Fc'].shift(records_per_day),
+						  'Ta':df['Ta']-df['Ta'].shift(records_per_day),
+						  'ws':df['ws']-df['ws'].shift(records_per_day),
+						  'Fsd':df['Fsd']-df['Fsd'].shift(records_per_day)}).reset_index()
+	diff_df.dropna(axis=0,how='any',inplace=True)
+	
+	return diff_df
+	
+	# # Print the number of tuples that pass the user-set thresholds
+	# print str(len(diff_df))+' tuples passed difference constraints (S='+str(rad_threshold)+'Wm^-2, Ta='+str(temp_threshold)+'C, wind='+str(wind_threshold)+'ms^-1)\n'
 
-	# Print the number of tuples that pass the user-set thresholds
-	print str(len(diff_df))+' tuples passed difference constraints (S='+str(rad_threshold)+'Wm^-2, Ta='+str(temp_threshold)+'C, wind='+str(wind_threshold)+'ms^-1)\n'
+	# # Cut into desired number of quantiles and make the labels a new variable in the df
+	# diff_df['Category']=pd.qcut(diff_df['flux_mean'],num_classes).labels
 
-	# Cut into desired number of quantiles and make the labels a new variable in the df
-	diff_df['Category']=pd.qcut(diff_df['flux_mean'],num_classes).labels
+	# # Get the flux and flux error means for each category
+	# cats_df=diff_df.groupby(diff_df['Category']).mean()
 
-	# Get the flux and flux error means for each category
-	cats_df=diff_df.groupby(diff_df['Category']).mean()
+	# # Use category as index for df containing flux mean and error terms
+	# diff_df.index=diff_df['Category']
 
-	# Use category as index for df containing flux mean and error terms
-	diff_df.index=diff_df['Category']
+	# # Create sigma delta (bin-specific standard deviation of random error) variable in categories dataframe
+	# cats_df['sig_del']=np.nan
 
-	# Create sigma delta (bin-specific standard deviation of random error) variable in categories dataframe
-	cats_df['sig_del']=np.nan
+	# # Calculate sigma delta for all bins
+	# for i in cats_df.index:
+		# cats_df['sig_del'].ix[i]=(abs(diff_df['flux_err'].ix[i]-diff_df['flux_err'].ix[i].mean())).mean()*np.sqrt(2)
 
-	# Calculate sigma delta for all bins
-	for i in cats_df.index:
-		cats_df['sig_del'].ix[i]=(abs(diff_df['flux_err'].ix[i]-diff_df['flux_err'].ix[i].mean())).mean()*np.sqrt(2)
+	# # Calculate linear fit for +ve and -ve values...
+	# influx_linreg_stats=stats.linregress(cats_df['flux_mean'][cats_df['flux_mean']<0],cats_df['sig_del'][cats_df['flux_mean']<0])
+	# efflux_linreg_stats=stats.linregress(cats_df['flux_mean'][cats_df['flux_mean']>0],cats_df['sig_del'][cats_df['flux_mean']>0])
 
-	# Calculate linear fit for +ve and -ve values...
-	influx_linreg_stats=stats.linregress(cats_df['flux_mean'][cats_df['flux_mean']<0],cats_df['sig_del'][cats_df['flux_mean']<0])
-	efflux_linreg_stats=stats.linregress(cats_df['flux_mean'][cats_df['flux_mean']>0],cats_df['sig_del'][cats_df['flux_mean']>0])
+	# # Create df for propagation of error
+	# prop_df=pd.DataFrame({CpropName:df[CpropName].reindex(df['Fc'].dropna().index)})
+	# prop_df['sig_del']=np.where(prop_df[CpropName]>0,
+								# (prop_df[CpropName]*efflux_linreg_stats[0]+efflux_linreg_stats[1])/np.sqrt(2),
+								# (prop_df[CpropName]*influx_linreg_stats[0]+influx_linreg_stats[1])/np.sqrt(2))
 
-	# Create df for propagation of error
-	prop_df=pd.DataFrame({CpropName:df[CpropName].reindex(df['Fc'].dropna().index)})
-	prop_df['sig_del']=np.where(prop_df[CpropName]>0,
-								(prop_df[CpropName]*efflux_linreg_stats[0]+efflux_linreg_stats[1])/np.sqrt(2),
-								(prop_df[CpropName]*influx_linreg_stats[0]+influx_linreg_stats[1])/np.sqrt(2))
+	# # Create df to store results of random error propagation for each year
+	# years_df=pd.DataFrame({'Valid_n':prop_df[CpropName].groupby([lambda x: x.year]).count()})
 
-	# Create df to store results of random error propagation for each year
-	years_df=pd.DataFrame({'Valid_n':prop_df[CpropName].groupby([lambda x: x.year]).count()})
+	# # Calculate random error for all measured data at annual time step
+	# years_df['Random error ('+Cunits+')']=[random_sample_laplace(prop_df['sig_del'].ix[str(i)]) for i in years_df.index]
 
-	# Calculate random error for all measured data at annual time step
-	years_df['Random error ('+Cunits+')']=[random_sample_laplace(prop_df['sig_del'].ix[str(i)]) for i in years_df.index]
+	# # File out
+	# years_df.to_csv(os.path.join(file_out_path,file_out_name),',')
 
-	# File out
-	years_df.to_csv(os.path.join(file_out_path,file_out_name),',')
+	# # Create two plot axes
+	# plt.figure(1,figsize=(8,10))
 
-	# Create two plot axes
-	plt.figure(1,figsize=(8,10))
-
-	# Plots: 1) histogram to check error distribution is approximately Laplacian;
-	#        2) linear regression - random error as function of flux magnitude (binned by user-set quantiles)
-	hist_plot()            
-	linear_plot()
-	plt.tight_layout()
-	plt.show()
+	# # Plots: 1) histogram to check error distribution is approximately Laplacian;
+	# #        2) linear regression - random error as function of flux magnitude (binned by user-set quantiles)
+	# hist_plot()            
+	# linear_plot()
+	# plt.tight_layout()
+	# plt.show()

@@ -7,6 +7,7 @@ import datetime as dt
 from configobj import ConfigObj
 import Tkinter, tkFileDialog
 import netCDF4
+import sys
 
 # Custom module imports
 import ustar_threshold as ustar
@@ -51,15 +52,15 @@ df=get_nc(file_in)
 print 'Done!'
 
 # Set processing flags
-process_ustar=cf['processing_options']['ustar_+error']['process']
-process_random=cf['processing_options']['random_error']['process']
+process_ustar=cf['processing_options']['ustar_+error']['process']=='True'
+process_random=cf['processing_options']['random_error']['process']=='True'
 
 # Set propagation flags
-propagate_ustar_error=cf['processing_options']['ustar_+error']['propagate']
-propagate_random_error=cf['processing_options']['random_error']['propagate']
+propagate_ustar_error=cf['processing_options']['ustar_+error']['propagate']=='True'
+propagate_random_error=cf['processing_options']['random_error']['propagate']=='True'
 
 # Stop execution if no processing tasks
-if not propagate_ustar_error and not propagate_random_error: 
+if not process_ustar and not process_random: 
 	print 'No tasks set to process in configuration file... quitting'
 	sys.exit()
 	
@@ -84,6 +85,8 @@ reload(ustar)
 ### u* threshold and error ###
 
 if process_ustar:
+	
+	pdb.set_trace()
 	
 	# Set variable names
 	CfluxName=cf['variable_names']['ustar_+error']['carbon_flux']
@@ -118,4 +121,4 @@ if process_random:
 	sub_df.columns=['Fc','Ta','ws','Fsd']
 	
 	# Go do it
-	random_results=
+	random_results=random_error.random_error(sub_df,records_per_day)

@@ -11,6 +11,7 @@ import netCDF4
 # Custom module imports
 import ustar_threshold as ustar
 
+# Ingest data from the netCDF file
 def get_nc(file_in):
 	
     # Read file
@@ -32,6 +33,7 @@ def get_nc(file_in):
 root = Tkinter.Tk(); root.withdraw()
 cfName = tkFileDialog.askopenfilename(initialdir='')
 root.destroy()
+print cfName
 cf=ConfigObj(cfName)
 
 # Set input file and output path and create directories for plots and results
@@ -47,22 +49,29 @@ print 'Reading input file ...'
 df=get_nc(file_in)
 print 'Done!'
 
-# Set variable names
-CfluxName=cf['variable_names']['carbon_flux']
-TaName=cf['variable_names']['temperature']
-ustarName=cf['variable_names']['friction_velocity']
-radName=cf['variable_names']['solar_radiation']
-
 # Set processing flags
-process_ustar=cf['processing_options']['ustar_threshold']
-process_random=cf['processing_options']['random_error']
+process_ustar=cf['processing_options']['ustar_+error']['process']
+process_random=cf['processing_options']['random_error']['process']
 
+# Set propagation flags
+propagate_ustar_error=cf['processing_options']['ustar_+error']['propagate']
+propagate_random_error=cf['processing_options']['random_error']['propagate']
+
+# Stop execution if no processing tasks
+if not propagate_ustar_error and not propagate_random_error: 
+	print 'No tasks set to process in configuration file... quitting'
+	sys.exit()
+	
 # Set other parameters
-radiation_threshold=int(cf['user']['radiation_threshold'])
-flux_frequency=int(cf['user']['flux_frequency'])
+radiation_threshold=int(cf['user']['global']['radiation_threshold'])
+flux_frequency=int(cf['user']['global']['flux_frequency'])
 records_per_day=1440/int(flux_frequency)
+if propagate_ustar_error or propagate_random_error:
+	radiation_threshold=int(cf['user']['global']['radiation_threshold'])
+error_value=int(cf['user']['global']['nan_value'])
 
 # Check dataframe for duplicates, pad as necessary and sort
+df.replace(to_replace=error_value,value=np.nan,inplace=True)
 df.sort(inplace=True)
 df['index']=df.index
 df.drop_duplicates(cols='index',take_last=True,inplace=True)
@@ -75,8 +84,14 @@ reload(ustar)
 
 if process_ustar:
 	
+	# Set variable names
+	CfluxName=cf['variable_names']['ustar_+error']['carbon_flux']
+	TaName=cf['variable_names']['ustar_+error']['temperature']
+	ustarName=cf['variable_names']['ustar_+error']['friction_velocity']
+	radName=cf['variable_names']['ustar_+error']['solar_radiation']
+	
 	# Set number of bootstraps
-	num_bootstraps=int(cf['user']['num_bootstraps'])
+	num_bootstraps=int(cf['user']['ustar_+error']['num_bootstraps'])
 
     # Subset the df and create new column names
 	sub_df=df[[CfluxName,TaName,ustarName,radName]]

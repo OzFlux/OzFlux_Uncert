@@ -6,7 +6,7 @@ from configobj import ConfigObj
 import Tkinter, tkFileDialog
 
 # Custom module imports
-import syst_error_v26 as syst_error
+import ustar_threshold as ustar
 
 ###### Main program ######
 
@@ -62,7 +62,7 @@ if process_ustar:
     sub_df.columns=['Fc','Ta','ustar','Fsd']
     
     # Go do it
-    ustar_results=syst_error.ustar_main(sub_df,plot_path_out,results_path_out,
+    ustar_results=ustar.ustar_main(sub_df,plot_path_out,results_path_out,
 										radiation_threshold,num_bootstraps,flux_frequency)
 
 #------------------------------------------------------------------------------#

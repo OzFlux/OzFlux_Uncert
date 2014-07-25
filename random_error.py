@@ -72,8 +72,8 @@ def calculate_random_error(df,results_path_out,plot_path_out,configs,flux_freque
     return linreg_stats_df
 
 # What?
-def propagate_random_error(prop_df,stats_df,results_path_out,plot_path_out,num_trials):
- 						
+def propagate_random_error(prop_df,stats_df,results_path_out,plot_path_out,flux_frequency,num_trials):
+     						 						 						
     # Create df for propagation of error (drop nans)
     prop_df['sig_del']=np.where(prop_df['Fc']>0,
                                (prop_df['Fc']*stats_df.ix['efflux'][0]+stats_df.ix['efflux'][1])/np.sqrt(2),
@@ -88,7 +88,7 @@ def propagate_random_error(prop_df,stats_df,results_path_out,plot_path_out,num_t
     years_df['Random error (Fc)']=np.nan
     for i in years_df.index:
         temp_arr=np.array([np.random.laplace(0,prop_df['sig_del'].ix[str(i)]).sum() for j in xrange(num_trials)])
-        years_df['Random error (Fc)'].ix[i]=temp_arr.std()*crit_t*12*10**-6*1800
+        years_df['Random error (Fc)'].ix[i]=temp_arr.std()*crit_t*12*10**-6*flux_frequency*60
     
     # Output data
     years_df.to_csv(os.path.join(results_path_out,'random_error_propagation_results.csv'))

@@ -53,24 +53,17 @@ print 'Done!'
 
 # Set processing flags
 process_ustar=cf['processing_options']['ustar_+error']['process']=='True'
-process_random=cf['processing_options']['random_error']['process']=='True'
+process_random_error=cf['processing_options']['random_error']['process']=='True'
 
 # Set propagation flags
 propagate_ustar_error=cf['processing_options']['ustar_+error']['propagate']=='True'
 propagate_random_error=cf['processing_options']['random_error']['propagate']=='True'
 
-# Stop execution if no processing tasks
-if not process_ustar and not process_random: 
-	print 'No tasks set to process in configuration file... quitting'
-	sys.exit()
-	
 # Set other parameters
 radiation_threshold=int(cf['user']['global']['radiation_threshold'])
 flux_frequency=int(cf['user']['global']['flux_frequency'])
-records_per_day=1440/int(flux_frequency)
-if propagate_ustar_error or propagate_random_error:
-	radiation_threshold=int(cf['user']['global']['radiation_threshold'])
 error_value=int(cf['user']['global']['nan_value'])
+num_trials=int(cf['user']['global']['num_MonteCarlo_trials'])
 
 # Check dataframe for duplicates, pad as necessary and sort
 df.replace(to_replace=error_value,value=np.nan,inplace=True)
@@ -86,39 +79,57 @@ reload(ustar)
 
 if process_ustar:
 	
-	pdb.set_trace()
+    # Set variable names
+    CfluxName=cf['variable_names']['ustar_+error']['carbon_flux']
+    TaName=cf['variable_names']['ustar_+error']['temperature']
+    ustarName=cf['variable_names']['ustar_+error']['friction_velocity']
+    radName=cf['variable_names']['ustar_+error']['solar_radiation']
 	
-	# Set variable names
-	CfluxName=cf['variable_names']['ustar_+error']['carbon_flux']
-	TaName=cf['variable_names']['ustar_+error']['temperature']
-	ustarName=cf['variable_names']['ustar_+error']['friction_velocity']
-	radName=cf['variable_names']['ustar_+error']['solar_radiation']
-	
-	# Set number of bootstraps
-	num_bootstraps=int(cf['user']['ustar_+error']['num_bootstraps'])
+    # Set number of bootstraps
+    num_bootstraps=int(cf['user']['ustar_+error']['num_bootstraps'])
 
     # Subset the df and create new column names
-	sub_df=df[[CfluxName,TaName,ustarName,radName]]
-	sub_df.columns=['Fc','Ta','ustar','Fsd']
+    sub_df=df[[CfluxName,TaName,ustarName,radName]]
+    sub_df.columns=['Fc','Ta','ustar','Fsd']
     
     # Go do it
-	ustar_results=ustar.ustar_main(sub_df,plot_path_out,results_path_out,
-								   radiation_threshold,num_bootstraps,flux_frequency)
+    ustar_results=ustar.ustar_main(sub_df,plot_path_out,results_path_out,
+                                   radiation_threshold,num_bootstraps,flux_frequency)
 
 #------------------------------------------------------------------------------#
 ### random error 
 
-if process_random:
+if process_random_error:
 	
-	# Set variable names
-	CfluxName=cf['variable_names']['random_error']['carbon_flux']
-	TaName=cf['variable_names']['random_error']['temperature']
-	windspdName=cf['variable_names']['random_error']['wind_speed']
-	radName=cf['variable_names']['random_error']['solar_radiation']
+    # Set variable names
+    CfluxName=cf['variable_names']['random_error']['carbon_flux']
+    TaName=cf['variable_names']['random_error']['temperature']
+    windspdName=cf['variable_names']['random_error']['wind_speed']
+    radName=cf['variable_names']['random_error']['solar_radiation']
 
-	# Subset the df and create new column names
-	sub_df=df[[CfluxName,TaName,windspdName,radName]]
-	sub_df.columns=['Fc','Ta','ws','Fsd']
+    # Import constraints from config file
+    configs=cf['user']['random_error']
 	
-	# Go do it
-	random_results=random_error.random_error(sub_df,records_per_day)
+    # Subset the df and create new column names
+    sub_df=df[[CfluxName,TaName,windspdName,radName]]
+    sub_df.columns=['Fc','Ta','ws','Fsd']
+	
+    # Calculate statistics and output plots of random error variance
+    random_results=random_error.calculate_random_error(sub_df,results_path_out,plot_path_out,configs,flux_frequency)
+    
+if propagate_random_error:
+    
+    if process_random_error:
+        stats_df=random_results
+    else: 
+        if os.path.exists(os.path.join(results_path_out,'random_error_stats.csv')):
+            stats_df=pd.read_csv(os.path.join(results_path_out,'random_error_stats.csv'))
+        else:
+            'Please calculate statistics of random error variance first (use random_error.calc_random_error_stats)'
+            sys.exit()
+            
+    # Subset the df and create new column names    
+    sub_df=pd.DataFrame({'Fc':df[CfluxName]})
+    
+    # Calculate statistics and output plots of uncertainty due to random error
+    random_propagation_results=random_error.propagate_random_error(sub_df,stats_df,results_path_out,plot_path_out,num_trials)

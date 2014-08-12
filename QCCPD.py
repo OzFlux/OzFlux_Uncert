@@ -11,6 +11,13 @@ from scipy import stats
 import pdb
 import os
 
+#------------------------------------------------------------------------------
+# Return a bootstrapped sample of the passed dataframe
+def bootstrap(sample_df):
+    return sample_df.iloc[np.random.random_integers(0,len(sample_df)-1,len(sample_df))]
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
 # Fetch the data and prepare it for analysis
 def CPD_run():
         
@@ -59,22 +66,19 @@ def CPD_run():
     df=df[vars_data]
     
     return df,d
+#------------------------------------------------------------------------------
 
-    # Return a bootstrapped sample of the passed dataframe
-def bootstrap(sample_df):
-    return sample_df.iloc[np.random.random_integers(0,len(sample_df)-1,len(sample_df))]
-
+#------------------------------------------------------------------------------
+# Coordinate steps in CPD process
 def CPD_main():
 
     df,d=CPD_run()
     
     ### Bootstrap the data and run the CPD algorithm
-    for i in xrange(bootstrap_n):
+    for i in xrange(d['num_bootstraps']):
         
-        # Use the observed data as the first sample
+         # Bootstrap the data for each year
         bootstrap_flag=(False if i==0 else True)
-        
-        # Bootstrap the data for each year
         if bootstrap_flag==False:
             print 'Using observational data for first pass'
         else:
@@ -82,29 +86,23 @@ def CPD_main():
             print 'Generating bootstrap '+str(i)
         
         # Create nocturnal dataframe (drop all records where any one of the variables is NaN)
-        df=df[['Fc','Ta','ustar']][df['Fsd']<rad_threshold].dropna(how='any',axis=0)        
+        df=df[['Fc','Ta','ustar']][df['Fsd']<d['radiation_threshold']].dropna(how='any',axis=0)        
+
+        # Arrange data into seasons
+        years_df,seasons_df,results_df=sort_data(df,d['flux_frequency'])       
         
-#                
-#        
-#        # Organise data into years, seasons and temperature strata, sort by temperature and u* and average across bins
-#        print 'Sorting data'
-#        try:
-#            years_df,seasons_df,results_df=analysis_prep.sort_data(noct_df,fluxfreq)       
-#        except StandardError:
-#            # data noct_df is problematic
-#            continue
-#        
-#        # Use the results df index as an iterator to run the CPD algorithm on the year/season/temperature strata
-#        print 'Finding change points'
-#        fitData_array=np.vstack([CPD.fits(seasons_df.ix[i[0]].ix[i[1]].ix[i[2]],i[0],i[1],i[2],bootstrap_flag,plot_out) for i in results_df.index])
-#        cols=['bMod_threshold','bMod_f_max','b1','bMod_CP','aMod_threshold','aMod_f_max','norm_a1','norm_a2','a1p','a2p']
-#        
-#        # Recompose the results dataframe with fit results
-#        results_df=results_df.reset_index(level=['season','T_class'],drop=True) 
-#        temp_S=results_df['T_avg']
-#        temp_index=results_df.index
-#        results_df=pd.DataFrame(fitData_array,columns=cols,index=temp_index)
-#        results_df['T_avg']=temp_S
+        # Use the results df index as an iterator to run the CPD algorithm on the year/season/temperature strata
+        print 'Finding change points'
+        cols=['bMod_threshold','bMod_f_max','b1','bMod_CP','aMod_threshold','aMod_f_max','norm_a1','norm_a2','a1p','a2p']
+        fitData_array=np.vstack([CPD_fit(seasons_df.ix[j[0]].ix[j[1]].ix[j[2]],j[0],j[1],j[2],bootstrap_flag,plot_out) for j in results_df.index])
+        
+        
+        # Recompose the results dataframe with fit results
+        results_df=results_df.reset_index(level=['season','T_class'],drop=True) 
+        temp_S=results_df['T_avg']
+        temp_index=results_df.index
+        results_df=pd.DataFrame(fitData_array,columns=cols,index=temp_index)
+        results_df['T_avg']=temp_S
 #
 #        # QC the results and strip remaining extraneous columns
 #        print 'Doing QC within bootstrap'
@@ -117,7 +115,7 @@ def CPD_main():
 # Find change point for model with slope above change point (Barr's
 # 'diagnostic' model)
 
-def fits(temp_df,year,season,T_class,bootstrap_flag,plot_out_path):
+def CPD_fit(temp_df,year,season,T_class,bootstrap_flag,plot_out_path):
     
     # Only works if the index is reset here (bug?)!
     temp_df=temp_df.reset_index(drop=True)
@@ -197,3 +195,54 @@ def fits(temp_df,year,season,T_class,bootstrap_flag,plot_out_path):
     return [ustar_threshold_b,f_b_max,b1,change_point_b,ustar_threshold_a,f_a_max,norm_a1,norm_a2,a1p,a2p]
 
 #------------------------------------------------------------------------------#
+
+#------------------------------------------------------------------------------
+def sort_data(df,fluxfreq):
+    
+    # Set the bin size on the basis of the flux measurement frequency
+    if fluxfreq==30:
+        bin_size=1000
+    else:
+        bin_size=600
+    
+    # Create a df containing count stats for the variables for all available years
+    years_df=pd.DataFrame({'Fc_count':df['Fc'].groupby([lambda x: x.year]).count()})
+    years_df['seasons']=[years_df['Fc_count'].ix[j]/(bin_size/2)-1 for j in years_df.index]  
+    if not np.any(years_df['seasons']):
+        print 'No years with sufficient data for evaluation. Exiting...'
+        sys.exit()
+    elif not np.all(years_df['seasons']) or np.any(years_df['seasons']<=0):
+        exclude_years_list=years_df[years_df['seasons']<=0].index.tolist()
+        exclude_years_str= ','.join(map(str,exclude_years_list))
+        print 'Insufficient data for evaluation in the following years: '+exclude_years_str+' (excluded from analysis)'
+        years_df=years_df[years_df['seasons']>0]
+    
+    # Extract overlapping series, sort by temperature and concatenate
+    seasons_df=pd.concat([pd.concat([df.ix[str(i)].iloc[j*(bin_size/2):j*(bin_size/2)+bin_size].sort('Ta',axis=0) 
+                                     for j in xrange(years_df['seasons'].ix[i])]) 
+                                     for i in years_df.index])
+
+    # Make a hierarchical index for year, season, temperature class for the seasons dataframe
+    years_index=np.concatenate([np.int32(np.ones(years_df['seasons'].ix[i]*bin_size)*i) 
+                                for i in years_df.index])
+    seasons_index=np.concatenate([np.concatenate([np.int32(np.ones(bin_size)*(i+1)) 
+                                  for i in xrange(years_df['seasons'].ix[j])]) for j in years_df.index])
+    Tclass_index=np.tile(np.concatenate([np.int32(np.ones(bin_size/4)*(i+1)) 
+                                         for i in xrange(4)]),len(seasons_index)/bin_size)
+    bin_index=np.tile(np.int32(np.arange(bin_size/4)/(bin_size/200)),len(seasons_df)/(bin_size/4))
+    arrays=[years_index,seasons_index,Tclass_index]
+    tuples=list(zip(*arrays))
+    hierarchical_index=pd.MultiIndex.from_tuples(tuples,names=['year','season','T_class'])
+    seasons_df.index=hierarchical_index
+    
+    # Set up the results df, sort the seasons by ustar, then bin average
+    results_df=pd.DataFrame({'T_avg':seasons_df['Ta'].groupby(level=['year','season','T_class']).mean()})
+    seasons_df=pd.concat([seasons_df.ix[i[0]].ix[i[1]].ix[i[2]].sort('ustar',axis=0) for i in results_df.index])
+    seasons_df.index=hierarchical_index
+    seasons_df=seasons_df.set_index(bin_index,append=True)
+    seasons_df.index.names=['year','season','T_class','bin']
+    seasons_df=seasons_df.groupby(level=['year','season','T_class','bin']).mean()
+    seasons_df=seasons_df.reset_index(level=['bin'],drop=True)
+    seasons_df=seasons_df[['ustar','Fc']]
+   
+    return years_df,seasons_df,results_df

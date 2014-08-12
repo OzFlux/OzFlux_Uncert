@@ -1,6 +1,8 @@
 # Python modules
 import Tkinter, tkFileDialog
 from configobj import ConfigObj
+import matplotlib.pyplot as plt
+import matplotlib.mlab as mlab
 import netCDF4
 import xlrd
 import datetime as dt
@@ -8,128 +10,32 @@ import ast
 import numpy as np
 import pandas as pd
 from scipy import stats
-import pdb
 import os
+import sys
+import pdb
 
 #------------------------------------------------------------------------------
 # Return a bootstrapped sample of the passed dataframe
-def bootstrap(sample_df):
-    return sample_df.iloc[np.random.random_integers(0,len(sample_df)-1,len(sample_df))]
+def CPD_bootstrap(df):
+    return df.iloc[np.random.random_integers(0,len(df)-1,len(df))]
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
-# Fetch the data and prepare it for analysis
-def CPD_run():
-        
-    # Prompt user for configuration file and get it
-    root = Tkinter.Tk(); root.withdraw()
-    cfName = tkFileDialog.askopenfilename(initialdir='')
-    root.destroy()
-    cf=ConfigObj(cfName)
-    
-    # Set input file and output path and create directories for plots and results
-    file_in=os.path.join(cf['files']['input_path'],cf['files']['input_file'])
-    path_out=cf['files']['output_path']
-    plot_path_out=os.path.join(path_out,'Plots')
-    if not os.path.isdir(plot_path_out): os.makedirs(os.path.join(path_out,'Plots'))
-    results_path_out=os.path.join(path_out,'Results')
-    if not os.path.isdir(results_path_out): os.makedirs(os.path.join(path_out,'Results'))    
-    
-    # Get user-set variable names from config file
-    vars_data=[cf['variables']['data'][i] for i in cf['variables']['data']]
-    vars_QC=[cf['variables']['QC'][i] for i in cf['variables']['QC']]
-    vars_all=vars_data+vars_QC
-       
-    # Read .nc file
-    nc_obj=netCDF4.Dataset(file_in)
-    flux_frequency=int(nc_obj.time_step)
-    dates_list=[dt.datetime(*xlrd.xldate_as_tuple(elem,0)) for elem in nc_obj.variables['xlDateTime']]
-    d={}
-    for i in vars_all:
-        d[i]=nc_obj.variables[i][:]
-    nc_obj.close()
-    df=pd.DataFrame(d,index=dates_list)    
-        
-    # Build dictionary of additional configs
-    d={}
-    d['radiation_threshold']=int(cf['options']['radiation_threshold'])
-    d['num_bootstraps']=int(cf['options']['num_bootstraps'])
-    d['flux_frequency']=flux_frequency
-        
-    # Replace configured error values with NaNs and remove data with unacceptable QC codes, then drop flags
-    df.replace(int(cf['options']['nan_value']),np.nan)
-    if 'QC_accept_codes' in cf['options']:    
-        QC_accept_codes=ast.literal_eval(cf['options']['QC_accept_codes'])
-        eval_string='|'.join(['(df[vars_QC[i]]=='+str(i)+')' for i in QC_accept_codes])
-        for i in xrange(4):
-            df[vars_data[i]]=np.where(eval(eval_string),df[vars_data[i]],np.nan)
-    df=df[vars_data]
-    
-    return df,d
-#------------------------------------------------------------------------------
-
-#------------------------------------------------------------------------------
-# Coordinate steps in CPD process
-def CPD_main():
-
-    df,d=CPD_run()
-    
-    ### Bootstrap the data and run the CPD algorithm
-    for i in xrange(d['num_bootstraps']):
-        
-         # Bootstrap the data for each year
-        bootstrap_flag=(False if i==0 else True)
-        if bootstrap_flag==False:
-            print 'Using observational data for first pass'
-        else:
-            df=pd.concat([bootstrap(df.ix[str(j)]) for j in years_index])
-            print 'Generating bootstrap '+str(i)
-        
-        # Create nocturnal dataframe (drop all records where any one of the variables is NaN)
-        df=df[['Fc','Ta','ustar']][df['Fsd']<d['radiation_threshold']].dropna(how='any',axis=0)        
-
-        # Arrange data into seasons
-        years_df,seasons_df,results_df=sort_data(df,d['flux_frequency'])       
-        
-        # Use the results df index as an iterator to run the CPD algorithm on the year/season/temperature strata
-        print 'Finding change points'
-        cols=['bMod_threshold','bMod_f_max','b1','bMod_CP','aMod_threshold','aMod_f_max','norm_a1','norm_a2','a1p','a2p']
-        fitData_array=np.vstack([CPD_fit(seasons_df.ix[j[0]].ix[j[1]].ix[j[2]],j[0],j[1],j[2],bootstrap_flag,plot_out) for j in results_df.index])
-        
-        
-        # Recompose the results dataframe with fit results
-        results_df=results_df.reset_index(level=['season','T_class'],drop=True) 
-        temp_S=results_df['T_avg']
-        temp_index=results_df.index
-        results_df=pd.DataFrame(fitData_array,columns=cols,index=temp_index)
-        results_df['T_avg']=temp_S
-#
-#        # QC the results and strip remaining extraneous columns
-#        print 'Doing QC within bootstrap'
-#        results_df=CPD_QC.QC1(results_df)
-#        
-#        # Run the CPD algorithm and return results
-#        interm_list.append(results_df)
-#        counts_list.append(years_df['seasons']*4)
-    
-# Find change point for model with slope above change point (Barr's
-# 'diagnostic' model)
-
-def CPD_fit(temp_df,year,season,T_class,bootstrap_flag,plot_out_path):
+def CPD_fit(temp_df):
     
     # Only works if the index is reset here (bug?)!
     temp_df=temp_df.reset_index(drop=True)
        
     ### Calculate null model SSE for operational (b) and diagnostic (a) model
     SSE_null_b=((temp_df['Fc']-temp_df['Fc'].mean())**2).sum() # b model SSE
-    alpha0,alpha1=stats.linregress(temp_df['ustar'],temp_df['ustar'])[:2] # a model regression
+    alpha0,alpha1=stats.linregress(temp_df['ustar'],temp_df['Fc'])[:2] # a model regression
     SSE_null_a=((temp_df['Fc']-(temp_df['ustar']*alpha0+alpha1))**2).sum() # a model SSE
     
     ### Create empty array to hold f statistics
     f_a_array=np.empty(50)
     f_b_array=np.empty(50)
     
-    # Add series to df for OLS
+    # Add series to df for numpy linalg
     temp_df['int']=np.ones(50)
     
     ### Iterate through all possible change points (1-49) as below
@@ -150,7 +56,7 @@ def CPD_fit(temp_df,year,season,T_class,bootstrap_flag,plot_out_path):
         SSE_full=((temp_df['Fc']-yHat)**2).sum() # Calculate SSE
         f_a_array[i]=(SSE_null_a-SSE_full)/(SSE_full/(50-2)) # Calculate and store F-score
         
-    ### Pad f-score array and get maximum value and associated change point and ustar value
+    # Get max f-score, associated change point and ustar value
     
     # b model
     f_b_array[0],f_b_array[-1]=f_b_array.min(),f_b_array.min()
@@ -164,7 +70,7 @@ def CPD_fit(temp_df,year,season,T_class,bootstrap_flag,plot_out_path):
     change_point_a=f_a_array.argmax()
     ustar_threshold_a=temp_df['ustar'].iloc[change_point_a]
     
-    ### Do stats
+    # Get regression parameters
     
     # b model
     temp_df['ustar_alt']=temp_df['ustar']
@@ -172,32 +78,143 @@ def CPD_fit(temp_df,year,season,T_class,bootstrap_flag,plot_out_path):
     reg_params=np.linalg.lstsq(temp_df[['int','ustar_alt']],temp_df['Fc'])[0]
     b0=reg_params[0]
     b1=reg_params[1]
-        
-    # a model (note that ols has to be done twice because pandas ols returns strange result - at least different to numpy - for intercept)
+   
+    # a model
     temp_df['dummy']=(temp_df['ustar']-ustar_threshold_a)*np.concatenate([np.zeros(change_point_a+1),np.ones(50-(change_point_a+1))])
-    reg_params=np.linalg.lstsq(temp_df[['int','ustar','dummy']],temp_df['Fc'])[0]
-    a0=reg_params[0]
-    a1=reg_params[1]
-    a2=reg_params[2]     
-    reg_params=pd.ols(x=temp_df[['int','ustar','dummy']],y=temp_df['Fc']) 
+    reg_params=pd.ols(x=temp_df[['ustar','dummy']],y=temp_df['Fc'])    
+    a0=reg_params.beta['intercept']
+    a1=reg_params.beta['ustar']
+    a2=reg_params.beta['dummy']     
     a1p=reg_params.p_value['ustar']
     a2p=reg_params.p_value['dummy']
-    norm_a1=a1*(ustar_threshold_a/(a0+a1*ustar_threshold_a))
-    norm_a2=a2*(ustar_threshold_a/(a0+a1*ustar_threshold_a))
-    
-    ### Call plotting (pass obs data to plotting function)
-    if bootstrap_flag==False:
-        temp_df['yHat_b']=b0+b1*temp_df['ustar_alt']
-        temp_df['yHat_a']=a0+a1*temp_df['ustar']+a2*temp_df['dummy'] # Calculate the estimated time series                                                                                                              
-        ustar_plots.plot_fits(temp_df,ustar_threshold_b,change_point_b,year,season,T_class,plot_out_path)    
-    
-    ### Return the temporary df
-    return [ustar_threshold_b,f_b_max,b1,change_point_b,ustar_threshold_a,f_a_max,norm_a1,norm_a2,a1p,a2p]
+    # Calculate normalised a1 and a2 parameters - check this in Barr, may be wrong!!!
+    norm_a1=a1*ustar_threshold_a/(a0+a1*ustar_threshold_a)
+    norm_a2=a2*ustar_threshold_a/(a0+a1*ustar_threshold_a)
 
-#------------------------------------------------------------------------------#
+    # Return results
+    return [ustar_threshold_b,f_b_max,b0,b1,change_point_b,
+            ustar_threshold_a,f_a_max,a0,a1,a2,norm_a1,norm_a2,change_point_a,a1p,a2p]
 
 #------------------------------------------------------------------------------
-def sort_data(df,fluxfreq):
+
+#------------------------------------------------------------------------------
+# Coordinate steps in CPD process
+def CPD_main():
+
+    df,d=CPD_run()
+    
+    # Bootstrap the data and run the CPD algorithm
+    for i in xrange(d['num_bootstraps']):
+        
+        # Bootstrap the data for each year
+        bootstrap_flag=(False if i==0 else True)
+        if bootstrap_flag==False:
+            print 'Using observational data for first pass'
+        else:
+            df=pd.concat([CPD_bootstrap(df.ix[str(j)]) for j in years_index])
+            print 'Generating bootstrap '+str(i)
+        
+        # Create nocturnal dataframe (drop all records where any one of the variables is NaN)
+        df=df[['Fc','Ta','ustar']][df['Fsd']<d['radiation_threshold']].dropna(how='any',axis=0)        
+
+        # Arrange data into seasons
+        years_df,seasons_df,results_df=CPD_sort(df,d['flux_frequency'])       
+        
+        # Use the results df index as an iterator to run the CPD algorithm on the year/season/temperature strata
+        print 'Finding change points...'
+        cols=['bMod_threshold','bMod_f_max','b0','b1','bMod_CP',
+              'aMod_threshold','aMod_f_max','a0','a1','a2','norm_a1','norm_a2','aMod_CP','a1p','a2p']
+#        stats_df=pd.DataFrame(np.vstack([CPD_fit(seasons_df.ix[j[0]].ix[j[1]].ix[j[2]]) for j in results_df.index]),
+        stats_df=pd.DataFrame(np.vstack([CPD_fit(seasons_df.ix[j]) for j in results_df.index]),                      
+                              columns=cols,index=results_df.index)
+        results_df=results_df.join(stats_df)        
+        print 'Done!'
+        
+        pdb.set_trace()        
+        
+        # Call plotting (pass obs data to plotting function)
+        if bootstrap_flag==False:
+            for j in results_df.index:
+                CPD_plot_fits(seasons_df.ix[j],results_df.ix[j],d['results_output_path'])
+
+        results_df=results_df.reset_index(level=['season','T_class'],drop=True)
+        
+#        # QC the results and strip remaining extraneous columns
+#        print 'Doing QC within bootstrap'
+#        results_df=CPD_QC.QC1(results_df)
+#        
+#        # Run the CPD algorithm and return results
+#        interm_list.append(results_df)
+#        counts_list.append(years_df['seasons']*4)
+    
+# Find change point for model with slope above change point (Barr's
+# 'diagnostic' model)
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
+# Plot identified change points in observed (i.e. not bootstrapped) data and   
+# write to specified folder                                                    
+def CPD_plot_fits(temp_df,stats_df,plot_out):
+    
+    temp_df['yHat_b']=stats_df['b0']+stats_df['b1']*temp_df['ustar_alt']
+    temp_df['yHat_a']=a0+a1*temp_df['ustar']+a2*temp_df['dummy'] # Calculate the estimated time series          
+    fig=plt.figure(figsize=(12,8))
+    fig.patch.set_facecolor('white')
+    plt.plot(temp_df['ustar'],temp_df['Fc'],'bo')
+    plt.plot(temp_df['ustar'],temp_df['yHat_b'],color='red')   
+    plt.plot(temp_df['ustar'],temp_df['yHat_a'],color='green')   
+    plt.title('Year: '+str(year)+', Season: '+str(season)+', T class: '+str(T_class)+'\n',fontsize=22)
+    plt.xlabel(r'u* ($m\/s^{-1}$)',fontsize=16)
+    plt.ylabel(r'Fc ($\mu mol C\/m^{-2} s^{-1}$)',fontsize=16)
+    plt.axvline(x=ustar_threshold,color='black',linestyle='--')
+    props = dict(boxstyle='round,pad=1', facecolor='white', alpha=0.5)
+    txt='Change point detected at u*='+str(round(ustar_threshold,3))+' (i='+str(change_point)+')'
+    ax=plt.gca()
+    plt.text(0.57,0.1,txt,bbox=props,fontsize=12,verticalalignment='top',transform=ax.transAxes)
+    plot_out_name='Y'+str(year)+'_S'+str(season)+'_Tclass'+str(T_class)+'.jpg'
+    fig.savefig(os.path.join(plot_out,plot_out_name))
+    plt.close(fig)
+
+# Plot PDF of u* values and write to specified folder           
+def CPD_plot_hist(S,mu,sig,crit_t,year,plot_out):
+    S=S.reset_index(drop=True)
+    x_low=S.min()-0.1*S.min()
+    x_high=S.max()+0.1*S.max()
+    x=np.linspace(x_low,x_high,100)
+    fig=plt.figure(figsize=(12,8))
+    fig.patch.set_facecolor('white')
+    plt.hist(S,normed=True)
+    plt.plot(x,mlab.normpdf(x,mu,sig),color='red',linewidth=2.5,label='Gaussian PDF')
+    plt.xlim(x_low,x_high)
+    plt.xlabel(r'u* ($m\/s^{-1}$)',fontsize=16)
+    plt.axvline(x=mu-sig*crit_t,color='black',linestyle='--')
+    plt.axvline(x=mu+sig*crit_t,color='black',linestyle='--')
+    plt.legend(loc='upper left')
+    plt.title(str(year)+'\n')
+    plot_out_name='ustar'+str(year)+'.jpg'
+    fig.savefig(os.path.join(plot_out,plot_out_name))
+    plt.close(fig)
+
+# Plot normalised slope parameters to identify outlying years and output to    
+# results folder - user can discard output for that year                       
+def CPD_plot_slopes(df,plot_out):
+    df=df.reset_index(drop=True)
+    fig=plt.figure(figsize=(12,8))
+    fig.patch.set_facecolor('white')
+    plt.plot(df['norm_a1_median'],df['norm_a2_median'],'bo')
+    plt.xlim(-4,4)
+    plt.ylim(-4,4)
+    plt.xlabel('$Median\/normalised\/ a^{1}$',fontsize=16)
+    plt.ylabel('$Median\/normalised\/ a^{2}$',fontsize=16)
+    plt.title('Normalised slope parameters')
+    plot_out_name='normalised_slope_parameters.jpg'
+    fig.savefig(os.path.join(plot_out,plot_out_name))
+    plt.close(fig)
+
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
+def CPD_sort(df,fluxfreq):
     
     # Set the bin size on the basis of the flux measurement frequency
     if fluxfreq==30:
@@ -246,3 +263,57 @@ def sort_data(df,fluxfreq):
     seasons_df=seasons_df[['ustar','Fc']]
    
     return years_df,seasons_df,results_df
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
+# Fetch the data and prepare it for analysis
+def CPD_run():
+        
+    # Prompt user for configuration file and get it
+    root = Tkinter.Tk(); root.withdraw()
+    cfName = tkFileDialog.askopenfilename(initialdir='')
+    root.destroy()
+    cf=ConfigObj(cfName)
+    
+    # Set input file and output path and create directories for plots and results
+    file_in=os.path.join(cf['files']['input_path'],cf['files']['input_file'])
+    path_out=cf['files']['output_path']
+    plot_path_out=os.path.join(path_out,'Plots')
+    if not os.path.isdir(plot_path_out): os.makedirs(os.path.join(path_out,'Plots'))
+    results_path_out=os.path.join(path_out,'Results')
+    if not os.path.isdir(results_path_out): os.makedirs(os.path.join(path_out,'Results'))    
+    
+    # Get user-set variable names from config file
+    vars_data=[cf['variables']['data'][i] for i in cf['variables']['data']]
+    vars_QC=[cf['variables']['QC'][i] for i in cf['variables']['QC']]
+    vars_all=vars_data+vars_QC
+       
+    # Read .nc file
+    nc_obj=netCDF4.Dataset(file_in)
+    flux_frequency=int(nc_obj.time_step)
+    dates_list=[dt.datetime(*xlrd.xldate_as_tuple(elem,0)) for elem in nc_obj.variables['xlDateTime']]
+    d={}
+    for i in vars_all:
+        d[i]=nc_obj.variables[i][:]
+    nc_obj.close()
+    df=pd.DataFrame(d,index=dates_list)    
+        
+    # Build dictionary of additional configs
+    d={}
+    d['radiation_threshold']=int(cf['options']['radiation_threshold'])
+    d['num_bootstraps']=int(cf['options']['num_bootstraps'])
+    d['flux_frequency']=flux_frequency
+    d['plot_output_path']=plot_path_out
+    d['results_output_path']=results_path_out
+        
+    # Replace configured error values with NaNs and remove data with unacceptable QC codes, then drop flags
+    df.replace(int(cf['options']['nan_value']),np.nan)
+    if 'QC_accept_codes' in cf['options']:    
+        QC_accept_codes=ast.literal_eval(cf['options']['QC_accept_codes'])
+        eval_string='|'.join(['(df[vars_QC[i]]=='+str(i)+')' for i in QC_accept_codes])
+        for i in xrange(4):
+            df[vars_data[i]]=np.where(eval(eval_string),df[vars_data[i]],np.nan)
+    df=df[vars_data]
+    
+    return df,d
+#------------------------------------------------------------------------------

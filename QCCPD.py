@@ -124,25 +124,24 @@ def CPD_main():
         print 'Finding change points...'
         cols=['bMod_threshold','bMod_f_max','b0','b1','bMod_CP',
               'aMod_threshold','aMod_f_max','a0','a1','a2','norm_a1','norm_a2','aMod_CP','a1p','a2p']
-#        stats_df=pd.DataFrame(np.vstack([CPD_fit(seasons_df.ix[j[0]].ix[j[1]].ix[j[2]]) for j in results_df.index]),
         stats_df=pd.DataFrame(np.vstack([CPD_fit(seasons_df.ix[j]) for j in results_df.index]),                      
                               columns=cols,index=results_df.index)
         results_df=results_df.join(stats_df)        
         print 'Done!'
         
-        pdb.set_trace()        
-        
         # Call plotting (pass obs data to plotting function)
         if bootstrap_flag==False:
             for j in results_df.index:
                 CPD_plot_fits(seasons_df.ix[j],results_df.ix[j],d['results_output_path'])
-
+            # Export the results only for the obs data
         results_df=results_df.reset_index(level=['season','T_class'],drop=True)
         
-#        # QC the results and strip remaining extraneous columns
-#        print 'Doing QC within bootstrap'
-#        results_df=CPD_QC.QC1(results_df)
-#        
+        # QC the results
+        print 'Doing QC within bootstrap'
+        results_df=CPD_QC1(results_df)
+        print 'Done' 
+        
+       
 #        # Run the CPD algorithm and return results
 #        interm_list.append(results_df)
 #        counts_list.append(years_df['seasons']*4)
@@ -156,22 +155,29 @@ def CPD_main():
 # write to specified folder                                                    
 def CPD_plot_fits(temp_df,stats_df,plot_out):
     
-    temp_df['yHat_b']=stats_df['b0']+stats_df['b1']*temp_df['ustar_alt']
-    temp_df['yHat_a']=a0+a1*temp_df['ustar']+a2*temp_df['dummy'] # Calculate the estimated time series          
+    # Create series for use in plotting (this could be more easily called from fitting function - why are we separating these?)
+    temp_df['ustar_alt']=temp_df['ustar']
+    temp_df['ustar_alt'].iloc[int(stats_df['bMod_CP'])+1:]=stats_df['bMod_threshold']
+    temp_df['dummy']=((temp_df['ustar']-stats_df['aMod_threshold'])
+                      *np.concatenate([np.zeros(stats_df['aMod_CP']+1),np.ones(50-(stats_df['aMod_CP']+1))]))    
+    temp_df['yHat_a']=stats_df['a0']+stats_df['a1']*temp_df['ustar']+stats_df['a2']*temp_df['dummy'] # Calculate the estimated time series
+    temp_df['yHat_b']=stats_df['b0']+stats_df['b1']*temp_df['ustar_alt']          
+    
+    # Now plot    
     fig=plt.figure(figsize=(12,8))
     fig.patch.set_facecolor('white')
     plt.plot(temp_df['ustar'],temp_df['Fc'],'bo')
     plt.plot(temp_df['ustar'],temp_df['yHat_b'],color='red')   
     plt.plot(temp_df['ustar'],temp_df['yHat_a'],color='green')   
-    plt.title('Year: '+str(year)+', Season: '+str(season)+', T class: '+str(T_class)+'\n',fontsize=22)
+    plt.title('Year: '+str(stats_df.name[0])+', Season: '+str(stats_df.name[1])+', T class: '+str(stats_df.name[2])+'\n',fontsize=22)
     plt.xlabel(r'u* ($m\/s^{-1}$)',fontsize=16)
     plt.ylabel(r'Fc ($\mu mol C\/m^{-2} s^{-1}$)',fontsize=16)
-    plt.axvline(x=ustar_threshold,color='black',linestyle='--')
+    plt.axvline(x=stats_df['bMod_threshold'],color='black',linestyle='--')
     props = dict(boxstyle='round,pad=1', facecolor='white', alpha=0.5)
-    txt='Change point detected at u*='+str(round(ustar_threshold,3))+' (i='+str(change_point)+')'
+    txt='Change point detected at u*='+str(round(stats_df['bMod_threshold'],3))+' (i='+str(stats_df['bMod_CP'])+')'
     ax=plt.gca()
     plt.text(0.57,0.1,txt,bbox=props,fontsize=12,verticalalignment='top',transform=ax.transAxes)
-    plot_out_name='Y'+str(year)+'_S'+str(season)+'_Tclass'+str(T_class)+'.jpg'
+    plot_out_name='Y'+str(stats_df.name[0])+'_S'+str(stats_df.name[1])+'_Tclass'+str(stats_df.name[2])+'.jpg'
     fig.savefig(os.path.join(plot_out,plot_out_name))
     plt.close(fig)
 
@@ -211,6 +217,45 @@ def CPD_plot_slopes(df,plot_out):
     fig.savefig(os.path.join(plot_out,plot_out_name))
     plt.close(fig)
 
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
+# Quality control within bootstrap
+def CPD_QC1(QC1_df):
+
+    # Set significance level (these need to be moved, and a model needs to be explicitly calculated for a threshold)    
+    fmax_a_threshold=6.9
+    fmax_b_threshold=6.9
+    
+    QC1_df['major_mode']='True'
+    
+    # For each year, find all cases that belong to minority mode (i.e. mode is sign of slope below change point)
+    total_count=QC1_df['bMod_threshold'].groupby(QC1_df.index).count()
+    neg_slope=QC1_df['bMod_threshold'][QC1_df['b1']<0].groupby(QC1_df[QC1_df['b1']<0].index).count()
+    neg_slope=neg_slope.reindex(total_count.index)
+    neg_slope=neg_slope.fillna(0)
+    neg_slope=neg_slope/total_count*100
+    for i in neg_slope.index:
+        sign=1 if neg_slope.ix[i]<50 else -1
+        QC1_df['major_mode'].ix[i]=np.sign(QC1_df['b1'].ix[i])==sign
+    
+    # Make invalid (False) all b_model cases where: 1) fit not significantly better than null model; 
+    #                                               2) best fit at extreme ends;
+    #                                               3) case belongs to minority mode (for that year)
+    QC1_df['b_valid']=((QC1_df['bMod_f_max']>fmax_b_threshold)
+                       &(QC1_df['bMod_CP']>4)
+                       &(QC1_df['bMod_CP']<45)
+                       &(QC1_df['major_mode']==True))
+    
+    # Make invalid (False) all a_model cases where: 1) fit not significantly better than null model; 
+    #                                               2) slope below change point not statistically significant;
+    #                                               3) slope above change point statistically significant
+    QC1_df['a_valid']=(QC1_df['aMod_f_max']>fmax_a_threshold)&(QC1_df['a1p']<0.05)&(QC1_df['a2p']>0.05)
+    
+    QC1_df=QC1_df.drop('major_mode',1)    
+    
+    # Return the results df
+    return QC1_df
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------

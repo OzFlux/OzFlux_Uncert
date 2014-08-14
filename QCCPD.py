@@ -129,12 +129,15 @@ def CPD_main():
         results_df=results_df.join(stats_df)        
         print 'Done!'
         
+        # Do QC first        
+        
         # Call plotting (pass obs data to plotting function)
         if bootstrap_flag==False:
             for j in results_df.index:
-                CPD_plot_fits(seasons_df.ix[j],results_df.ix[j],d['results_output_path'])
-            # Export the results only for the obs data
-        results_df=results_df.reset_index(level=['season','T_class'],drop=True)
+                CPD_plot_fits(seasons_df.ix[j],results_df.ix[j],d['plot_output_path'])
+        
+        # Drop the season and temperature class levels from the hierarchical index
+#        results_df=results_df.reset_index(level=['season','T_class'],drop=True)
         
         # QC the results
         print 'Doing QC within bootstrap'
@@ -222,7 +225,7 @@ def CPD_plot_slopes(df,plot_out):
 #------------------------------------------------------------------------------
 # Quality control within bootstrap
 def CPD_QC1(QC1_df):
-
+    
     # Set significance level (these need to be moved, and a model needs to be explicitly calculated for a threshold)    
     fmax_a_threshold=6.9
     fmax_b_threshold=6.9
@@ -230,8 +233,8 @@ def CPD_QC1(QC1_df):
     QC1_df['major_mode']='True'
     
     # For each year, find all cases that belong to minority mode (i.e. mode is sign of slope below change point)
-    total_count=QC1_df['bMod_threshold'].groupby(QC1_df.index).count()
-    neg_slope=QC1_df['bMod_threshold'][QC1_df['b1']<0].groupby(QC1_df[QC1_df['b1']<0].index).count()
+    total_count=QC1_df['bMod_threshold'].groupby(level='year').count()
+    neg_slope=QC1_df['bMod_threshold'][QC1_df['b1']<0].groupby(level='year').count()
     neg_slope=neg_slope.reindex(total_count.index)
     neg_slope=neg_slope.fillna(0)
     neg_slope=neg_slope/total_count*100

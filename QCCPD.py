@@ -78,7 +78,9 @@ def CPD_fit(temp_df):
     reg_params=np.linalg.lstsq(temp_df[['int','ustar_alt']],temp_df['Fc'])[0]
     b0=reg_params[0]
     b1=reg_params[1]
-   
+    
+    pdb.set_trace()    
+    
     # a model
     temp_df['dummy']=(temp_df['ustar']-ustar_threshold_a)*np.concatenate([np.zeros(change_point_a+1),np.ones(50-(change_point_a+1))])
     reg_params=pd.ols(x=temp_df[['ustar','dummy']],y=temp_df['Fc'])    
@@ -103,6 +105,11 @@ def CPD_main():
 
     df,d=CPD_run()
     
+    years_index=list(set(df.index.year))
+    
+    interm_list=[]
+    counts_list=[]    
+    
     # Bootstrap the data and run the CPD algorithm
     for i in xrange(d['num_bootstraps']):
         
@@ -115,10 +122,10 @@ def CPD_main():
             print 'Generating bootstrap '+str(i)
         
         # Create nocturnal dataframe (drop all records where any one of the variables is NaN)
-        df=df[['Fc','Ta','ustar']][df['Fsd']<d['radiation_threshold']].dropna(how='any',axis=0)        
+        temp_df=df[['Fc','Ta','ustar']][df['Fsd']<d['radiation_threshold']].dropna(how='any',axis=0)        
 
         # Arrange data into seasons
-        years_df,seasons_df,results_df=CPD_sort(df,d['flux_frequency'])       
+        years_df,seasons_df,results_df=CPD_sort(temp_df,d['flux_frequency'])       
         
         # Use the results df index as an iterator to run the CPD algorithm on the year/season/temperature strata
         print 'Finding change points...'
@@ -129,22 +136,30 @@ def CPD_main():
         results_df=results_df.join(stats_df)        
         print 'Done!'
         
-        # Do QC first        
+        # QC the results
+        print 'Doing QC within bootstrap'
+        results_df=CPD_QC1(results_df)
+        print 'Done!' 
         
-        # Call plotting (pass obs data to plotting function)
+        # Output results and plots 
         if bootstrap_flag==False:
+            print 'Outputting results for all years / seasons / T classes'
+            results_df.to_csv(os.path.join(d['results_output_path'],'Observational_u*_threshold_statistics.csv'))
+            print 'Doing plotting for observational data'
             for j in results_df.index:
                 CPD_plot_fits(seasons_df.ix[j],results_df.ix[j],d['plot_output_path'])
         
         # Drop the season and temperature class levels from the hierarchical index
-#        results_df=results_df.reset_index(level=['season','T_class'],drop=True)
+        results_df=results_df.reset_index(level=['season','T_class'],drop=True)
         
-        # QC the results
-        print 'Doing QC within bootstrap'
-        results_df=CPD_QC1(results_df)
-        print 'Done' 
+        # Run the CPD algorithm and return results
+        interm_list.append(results_df)
+        counts_list.append(years_df['seasons']*4)
         
-       
+    # Concatenate results (u* thresholds and counts)
+    bootstrap_results_df=pd.concat(interm_list)
+    output_df=pd.DataFrame({'total_count':pd.concat(counts_list).groupby(pd.concat(counts_list).index).sum()})       
+
 #        # Run the CPD algorithm and return results
 #        interm_list.append(results_df)
 #        counts_list.append(years_df['seasons']*4)
@@ -230,7 +245,7 @@ def CPD_QC1(QC1_df):
     fmax_a_threshold=6.9
     fmax_b_threshold=6.9
     
-    QC1_df['major_mode']='True'
+    QC1_df['major_mode']=True
     
     # For each year, find all cases that belong to minority mode (i.e. mode is sign of slope below change point)
     total_count=QC1_df['bMod_threshold'].groupby(level='year').count()
@@ -240,7 +255,7 @@ def CPD_QC1(QC1_df):
     neg_slope=neg_slope/total_count*100
     for i in neg_slope.index:
         sign=1 if neg_slope.ix[i]<50 else -1
-        QC1_df['major_mode'].ix[i]=np.sign(QC1_df['b1'].ix[i])==sign
+        QC1_df['major_mode'].ix[i]=np.sign(np.array(QC1_df['b1'].ix[i]))==sign
     
     # Make invalid (False) all b_model cases where: 1) fit not significantly better than null model; 
     #                                               2) best fit at extreme ends;

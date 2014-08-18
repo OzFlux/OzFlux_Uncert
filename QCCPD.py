@@ -81,15 +81,25 @@ def CPD_fit(temp_df):
    
     # a model
     temp_df['dummy']=(temp_df['ustar']-ustar_threshold_a)*np.concatenate([np.zeros(change_point_a+1),np.ones(50-(change_point_a+1))])
-    reg_params=pd.ols(x=temp_df[['ustar','dummy']],y=temp_df['Fc'])    
-    
-    a0=reg_params.beta['intercept']
-    a1=reg_params.beta['ustar']
-    a2=reg_params.beta['dummy']     
-    a1p=reg_params.p_value['ustar']
-    a2p=reg_params.p_value['dummy']
+    reg_params=np.linalg.lstsq(temp_df[['int','ustar','dummy']],temp_df['Fc'])[0]
+    a0=reg_params[0]
+    a1=reg_params[1]
+    a2=reg_params[2]
     norm_a1=a1*(ustar_threshold_a/(a0+a1*ustar_threshold_a))
     norm_a2=a2*(ustar_threshold_a/(a0+a1*ustar_threshold_a))
+
+    # Check slope significance for a model above and below change point
+    Fc_est_CP=a0+temp_df['ustar'].iloc[change_point_a]*a1
+    # above...
+    x=temp_df['dummy'].iloc[change_point_a:]   
+    y=temp_df['Fc'].iloc[change_point_a:]-Fc_est_CP
+    reg_params=pd.ols(x=x,y=y,intercept=False)
+    a2p=reg_params.p_value['x']
+    # below...
+    x=temp_df['ustar'].iloc[:change_point_a+1]-temp_df['ustar'].iloc[change_point_a]
+    y=temp_df['Fc'].iloc[:change_point_a+1]-Fc_est_CP
+    reg_params=pd.ols(x=x,y=y,intercept=False)
+    a1p=reg_params.p_value['x']
 
     # Return results
     return [ustar_threshold_b,f_b_max,b0,b1,change_point_b,
@@ -184,6 +194,13 @@ def CPD_main():
     output_stats_df=CPD_QC2(all_results_df,counts_df,d['num_bootstraps'])
     print 'Done! \n Analysis complete' 
     
+    # Calculate final values and add to 
+    print 'Calculating final results' 
+    output_stats_df=CPD_stats(all_results_df,output_stats_df)    
+    if 'results_output_path' in d.keys():     
+        output_stats_df.to_csv(os.path.join(d['results_output_path'],'annual_statistics.csv'))    
+    
+    return output_stats_df    
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
@@ -282,9 +299,7 @@ def CPD_QC1(QC1_df):
                        &(QC1_df['bMod_CP']>4)
                        &(QC1_df['bMod_CP']<45)
                        &(QC1_df['major_mode']==True))
-    
-    pdb.set_trace()    
-    
+        
     # Make invalid (False) all a_model cases where: 1) fit not significantly better than null model; 
     #                                               2) slope below change point not statistically significant;
     #                                               3) slope above change point statistically significant
@@ -300,18 +315,18 @@ def CPD_QC1(QC1_df):
 #------------------------------------------------------------------------------
 # Quality control across bootstraps
 def CPD_QC2(df,output_df,bootstrap_n):
-    pdb.set_trace()
+    
     # Get the median values of the normalised slope parameters for each year
     output_df['norm_a1_median']=df['norm_a1'][df['a_valid']==True].groupby(df[df['a_valid']==True].index).median()
     output_df['norm_a2_median']=df['norm_a2'][df['a_valid']==True].groupby(df[df['a_valid']==True].index).median()
     
     # Get the proportion of all available cases that passed QC    
-    output_df['QCpass_count']=df['bMod_threshold'][df['b_valid']==True].groupby(df[df['b_valid']==True].index).count()
-    output_df['QCpass_prop']=output_df['QCpass_count']/output_df['total_count']
+    output_df['QCpass']=df['bMod_threshold'][df['b_valid']==True].groupby(df[df['b_valid']==True].index).count()
+    output_df['QCpass_prop']=output_df['QCpass']/output_df['Total']
        
     # Identify years where either diagnostic or operational model did not find enough good data for robust estimate
     output_df['a_valid']=(~(np.isnan(output_df['norm_a1_median']))&(~np.isnan(output_df['norm_a2_median'])))
-    output_df['b_valid']=(output_df['QCpass_count']>(4*bootstrap_n))&(output_df['QCpass_prop']>0.2)
+    output_df['b_valid']=(output_df['QCpass']>(4*bootstrap_n))&(output_df['QCpass_prop']>0.2)
     for i in output_df.index:
         if output_df['a_valid'].ix[i]==False: print 'Insufficient valid cases for robust diagnostic (a model) u* determination in year '+str(i)
         if output_df['b_valid'].ix[i]==False: print 'Insufficient valid cases for robust operational (b model) u* determination in year '+str(i)
@@ -370,6 +385,41 @@ def CPD_sort(df,fluxfreq):
     seasons_df=seasons_df[['ustar','Fc']]
    
     return years_df,seasons_df,results_df
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
+def CPD_stats(df,stats_df):
+    
+    # Add statistics vars to output df
+    stats_df['ustar_mean']=np.nan
+    stats_df['ustar_sig']=np.nan
+    stats_df['ustar_n']=np.nan
+    stats_df['crit_t']=np.nan
+    stats_df['95%CI_lower']=np.nan
+    stats_df['95%CI_upper']=np.nan
+    stats_df['skew']=np.nan
+    stats_df['kurt']=np.nan
+        
+    # Drop data that failed b model, then drop b model boolean variable
+    df=df[df['b_valid']==True]
+    df=df.drop('b_valid',axis=1)
+    
+    # Calculate stats
+    for i in stats_df.index:
+        if isinstance(df['bMod_threshold'].ix[i],pd.Series):
+            temp=stats.describe(df['bMod_threshold'].ix[i])
+            stats_df['ustar_mean'].ix[i]=temp[2]
+            stats_df['ustar_sig'].ix[i]=np.sqrt(temp[3])
+            stats_df['ustar_n']
+            stats_df['crit_t'].ix[i]=stats.t.ppf(1-0.025,temp[0])
+            stats_df['95%CI_lower'].ix[i]=stats_df['ustar_mean'].ix[i]-stats_df['ustar_sig'].ix[i]*stats_df['crit_t'].ix[i]
+            stats_df['95%CI_upper'].ix[i]=stats_df['ustar_mean'].ix[i]+stats_df['ustar_sig'].ix[i]*stats_df['crit_t'].ix[i]
+            stats_df['skew'].ix[i]=temp[4]
+            stats_df['kurt'].ix[i]=temp[5]
+        else:
+            stats_df['ustar_mean'].ix[i]=df['bMod_threshold'].ix[i]
+            
+    return stats_df
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------

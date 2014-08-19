@@ -117,11 +117,13 @@ def CPD_main():
     years_index=list(set(df.index.year))
     
     # Create df to keep counts of total samples and QC passed samples
-    counts_df=pd.DataFrame(index=years_index,columns=['Total', 'QC_pass'])
+    counts_df=pd.DataFrame(index=years_index,columns=['Total'])
     counts_df.fillna(0,inplace=True)
     
     # Bootstrap the data and run the CPD algorithm
     for i in xrange(d['num_bootstraps']):
+        
+        print 'Starting analysis for bootstrap '&str(i)        
         
         # Bootstrap the data for each year
         bootstrap_flag=(False if i==0 else True)
@@ -178,12 +180,14 @@ def CPD_main():
         # Iterate counters for each year for each bootstrap
         for i in years_df.index:
             counts_df['Total'].ix[i]=counts_df['Total'].ix[i]+years_df['seasons'].ix[i]*4
-            counts_df['QC_pass'].ix[i]=counts_df['QC_pass'].ix[i]+len(results_df.ix[i])
+    
+    print 'Finished change point detection for all bootstraps'
+    print 'Starting QC'    
     
     # Sort by index so all years are together
     all_results_df.sort_index(inplace=True)
     
-    # Drop all years with no data, and return nothing if all years were dropped
+    # Drop all years with no data remaining after QC, and return nothing if all years were dropped
     [counts_df.drop(i,inplace=True) for i in counts_df.index if counts_df['Total'].ix[i]==0]    
     if counts_df.empty:
         print 'Insufficient data for analysis... exiting'
@@ -425,7 +429,6 @@ def CPD_stats(df,stats_df):
     for i in stats_df.index:
         if isinstance(df['bMod_threshold'].ix[i],pd.Series):
             temp=stats.describe(df['bMod_threshold'].ix[i])
-            pdb.set_trace()
             stats_df['ustar_mean'].ix[i]=temp[2]
             stats_df['ustar_sig'].ix[i]=np.sqrt(temp[3])
             stats_df['crit_t'].ix[i]=stats.t.ppf(1-0.025,temp[0])

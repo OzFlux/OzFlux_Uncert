@@ -156,9 +156,9 @@ def CPD_main():
         # Output results and plots (if user has set output flags in config file to true)
         if bootstrap_flag==False:
             if 'results_output_path' in d.keys(): 
-                print 'Outputting results for all years / seasons / T classes'
+                print 'Outputting results for all years / seasons / T classes in observational dataset'
                 results_df.to_csv(os.path.join(d['results_output_path'],'Observational_u*_threshold_statistics.csv'))
-            if 'results_output_path' in d.keys(): 
+            if 'plot_output_path' in d.keys(): 
                 print 'Doing plotting for observational data'
                 for j in results_df.index:
                     CPD_plot_fits(seasons_df.ix[j],results_df.ix[j],d['plot_output_path'])
@@ -192,14 +192,31 @@ def CPD_main():
     # QC the combined results
     print 'Doing QC across all bootstraps...'
     output_stats_df=CPD_QC2(all_results_df,counts_df,d['num_bootstraps'])
-    print 'Done! \n Analysis complete' 
-    
-    # Calculate final values and add to 
+    print 'Done!' 
+
+    # Calculate final values
     print 'Calculating final results' 
     output_stats_df=CPD_stats(all_results_df,output_stats_df)    
-    if 'results_output_path' in d.keys():     
+    
+    # If requested by user, plot: 1) histograms of u* thresholds for each year; 
+    #                             2) normalised a1 and a2 values
+    if 'plot_output_path' in d.keys():
+        'Plotting u* histogram'
+        [CPD_plot_hist(all_results_df['bMod_threshold'].ix[j],
+                       output_stats_df['ustar_mean'].ix[j],
+                       output_stats_df['ustar_sig'].ix[j],
+                       output_stats_df['crit_t'].ix[j],
+                       j, d['plot_output_path'])
+                       for j in output_stats_df.index]
+        CPD_plot_slopes(output_stats_df[['norm_a1_median','norm_a2_median']],d['plot_output_path'])    
+    
+    # Output final stats if requested by user
+    if 'results_output_path' in d.keys():
+        'Outputting final results'
         output_stats_df.to_csv(os.path.join(d['results_output_path'],'annual_statistics.csv'))    
     
+    print 'Analysis complete!'
+    # Return final results
     return output_stats_df    
 #------------------------------------------------------------------------------
 
@@ -408,9 +425,9 @@ def CPD_stats(df,stats_df):
     for i in stats_df.index:
         if isinstance(df['bMod_threshold'].ix[i],pd.Series):
             temp=stats.describe(df['bMod_threshold'].ix[i])
+            pdb.set_trace()
             stats_df['ustar_mean'].ix[i]=temp[2]
             stats_df['ustar_sig'].ix[i]=np.sqrt(temp[3])
-            stats_df['ustar_n']
             stats_df['crit_t'].ix[i]=stats.t.ppf(1-0.025,temp[0])
             stats_df['95%CI_lower'].ix[i]=stats_df['ustar_mean'].ix[i]-stats_df['ustar_sig'].ix[i]*stats_df['crit_t'].ix[i]
             stats_df['95%CI_upper'].ix[i]=stats_df['ustar_mean'].ix[i]+stats_df['ustar_sig'].ix[i]*stats_df['crit_t'].ix[i]

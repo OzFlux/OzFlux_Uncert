@@ -11,8 +11,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 import os
-import sys
-import pdb
+
 
 #------------------------------------------------------------------------------
 # Return a bootstrapped sample of the passed dataframe
@@ -21,7 +20,7 @@ def CPD_bootstrap(df):
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
-def CPD_fit(temp_df):
+def CPD_fit(temp_df,ind):
     
     # Only works if the index is reset here (bug?)!
     temp_df=temp_df.reset_index(drop=True)
@@ -37,11 +36,11 @@ def CPD_fit(temp_df):
     
     # Add series to df for numpy linalg
     temp_df['int']=np.ones(50)
-    
+        
     ### Iterate through all possible change points (1-49) as below
     for i in xrange(1,49):
         
-        # Operational model
+        # Operational (b) model
         temp_df['ustar_alt']=temp_df['ustar'] # Add dummy variable to df
         temp_df['ustar_alt'].iloc[i+1:]=temp_df['ustar_alt'].iloc[i]
         reg_params=np.linalg.lstsq(temp_df[['int','ustar_alt']],temp_df['Fc'])[0] # Do linear regression
@@ -49,15 +48,17 @@ def CPD_fit(temp_df):
         SSE_full=((temp_df['Fc']-yHat)**2).sum() # Calculate SSE
         f_b_array[i]=(SSE_null_b-SSE_full)/(SSE_full/(50-2)) # Calculate and store F-score        
         
-        # Diagnostic model
-        temp_df['dummy']=(temp_df['ustar']-temp_df['ustar'].iloc[i])*np.concatenate([np.zeros(i+1),np.ones(50-(i+1))]) # Add dummy variable to df
-        reg_params=np.linalg.lstsq(temp_df[['int','ustar','dummy']],temp_df['Fc'])[0] # Do piecewise linear regression (multiple regression with dummy)          
-        yHat=reg_params[0]+reg_params[1]*temp_df['ustar']+reg_params[2]*temp_df['dummy'] # Calculate the predicted values for y
+        # Diagnostic (a) model
+        temp_df['ustar_alt1']=temp_df['ustar']
+        temp_df['ustar_alt1'].iloc[i+1:]=temp_df['ustar_alt1'].iloc[i]
+        temp_df['ustar_alt2']=(temp_df['ustar']-temp_df['ustar'].iloc[i])*np.concatenate([np.zeros(i+1),np.ones(50-(i+1))])
+        reg_params=np.linalg.lstsq(temp_df[['int','ustar_alt1','ustar_alt2']],temp_df['Fc'])[0] # Do piecewise linear regression (multiple regression with dummy)          
+        yHat=reg_params[0]+reg_params[1]*temp_df['ustar_alt1']+reg_params[2]*temp_df['ustar_alt2'] # Calculate the predicted values for y
         SSE_full=((temp_df['Fc']-yHat)**2).sum() # Calculate SSE
         f_a_array[i]=(SSE_null_a-SSE_full)/(SSE_full/(50-2)) # Calculate and store F-score
-        
+
     # Get max f-score, associated change point and ustar value
-    
+      
     # b model
     f_b_array[0],f_b_array[-1]=f_b_array.min(),f_b_array.min()
     f_b_max=f_b_array.max()
@@ -77,29 +78,20 @@ def CPD_fit(temp_df):
     temp_df['ustar_alt'].iloc[change_point_b+1:]=ustar_threshold_b
     reg_params=np.linalg.lstsq(temp_df[['int','ustar_alt']],temp_df['Fc'])[0]
     b0=reg_params[0]
-    b1=reg_params[1]
-   
+    b1=reg_params[1]    
+    
     # a model
-    temp_df['dummy']=(temp_df['ustar']-ustar_threshold_a)*np.concatenate([np.zeros(change_point_a+1),np.ones(50-(change_point_a+1))])
-    reg_params=np.linalg.lstsq(temp_df[['int','ustar','dummy']],temp_df['Fc'])[0]
-    a0=reg_params[0]
-    a1=reg_params[1]
-    a2=reg_params[2]
+    temp_df['ustar_alt1']=temp_df['ustar']
+    temp_df['ustar_alt1'].iloc[change_point_a+1:]=temp_df['ustar_alt1'].iloc[change_point_a]
+    temp_df['ustar_alt2']=(temp_df['ustar']-temp_df['ustar'].iloc[change_point_a])*np.concatenate([np.zeros(change_point_a+1),np.ones(50-(change_point_a+1))])
+    reg_params=pd.ols(x=temp_df[['ustar_alt1','ustar_alt2']],y=temp_df['Fc'])
+    a0=reg_params.beta.intercept
+    a1=reg_params.beta.ustar_alt1
+    a2=reg_params.beta.ustar_alt2
+    a1p=reg_params.p_value['ustar_alt1']
+    a2p=reg_params.p_value['ustar_alt2']
     norm_a1=a1*(ustar_threshold_a/(a0+a1*ustar_threshold_a))
     norm_a2=a2*(ustar_threshold_a/(a0+a1*ustar_threshold_a))
-
-    # Check slope significance for a model above and below change point
-    Fc_est_CP=a0+temp_df['ustar'].iloc[change_point_a]*a1
-    # above...
-    x=temp_df['dummy'].iloc[change_point_a:]   
-    y=temp_df['Fc'].iloc[change_point_a:]-Fc_est_CP
-    reg_params=pd.ols(x=x,y=y,intercept=False)
-    a2p=reg_params.p_value['x']
-    # below...
-    x=temp_df['ustar'].iloc[:change_point_a+1]-temp_df['ustar'].iloc[change_point_a]
-    y=temp_df['Fc'].iloc[:change_point_a+1]-Fc_est_CP
-    reg_params=pd.ols(x=x,y=y,intercept=False)
-    a1p=reg_params.p_value['x']
 
     # Return results
     return [ustar_threshold_b,f_b_max,b0,b1,change_point_b,
@@ -123,7 +115,7 @@ def CPD_main():
     # Bootstrap the data and run the CPD algorithm
     for i in xrange(d['num_bootstraps']):
         
-        print 'Starting analysis for bootstrap '&str(i)        
+        print 'Starting analysis for bootstrap ' + str(i)
         
         # Bootstrap the data for each year
         bootstrap_flag=(False if i==0 else True)
@@ -145,7 +137,7 @@ def CPD_main():
         print 'Finding change points...'
         cols=['bMod_threshold','bMod_f_max','b0','b1','bMod_CP',
               'aMod_threshold','aMod_f_max','a0','a1','a2','norm_a1','norm_a2','aMod_CP','a1p','a2p']
-        stats_df=pd.DataFrame(np.vstack([CPD_fit(seasons_df.ix[j]) for j in results_df.index]),                      
+        stats_df=pd.DataFrame(np.vstack([CPD_fit(seasons_df.ix[j],j) for j in results_df.index]),                      
                               columns=cols,index=results_df.index)
         results_df=results_df.join(stats_df)        
         print 'Done!'
@@ -232,9 +224,11 @@ def CPD_plot_fits(temp_df,stats_df,plot_out):
     # Create series for use in plotting (this could be more easily called from fitting function - why are we separating these?)
     temp_df['ustar_alt']=temp_df['ustar']
     temp_df['ustar_alt'].iloc[int(stats_df['bMod_CP'])+1:]=stats_df['bMod_threshold']
-    temp_df['dummy']=((temp_df['ustar']-stats_df['aMod_threshold'])
-                      *np.concatenate([np.zeros(stats_df['aMod_CP']+1),np.ones(50-(stats_df['aMod_CP']+1))]))    
-    temp_df['yHat_a']=stats_df['a0']+stats_df['a1']*temp_df['ustar']+stats_df['a2']*temp_df['dummy'] # Calculate the estimated time series
+    temp_df['ustar_alt1']=temp_df['ustar']
+    temp_df['ustar_alt1'].iloc[stats_df['aMod_CP']+1:]=temp_df['ustar_alt1'].iloc[stats_df['aMod_CP']]
+    temp_df['ustar_alt2']=((temp_df['ustar']-stats_df['aMod_threshold'])
+                           *np.concatenate([np.zeros(stats_df['aMod_CP']+1),np.ones(50-(stats_df['aMod_CP']+1))]))
+    temp_df['yHat_a']=stats_df['a0']+stats_df['a1']*temp_df['ustar_alt1']+stats_df['a2']*temp_df['ustar_alt2'] # Calculate the estimated time series
     temp_df['yHat_b']=stats_df['b0']+stats_df['b1']*temp_df['ustar_alt']          
     
     # Now plot    

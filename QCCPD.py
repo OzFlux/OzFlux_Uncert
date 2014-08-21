@@ -11,7 +11,6 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 import os
-import pdb
 
 #------------------------------------------------------------------------------
 # Return a bootstrapped sample of the passed dataframe
@@ -112,11 +111,11 @@ def CPD_main():
     counts_df=pd.DataFrame(index=years_index,columns=['Total'])
     counts_df.fillna(0,inplace=True)
     
+    print 'Starting analysis...'    
+    
     # Bootstrap the data and run the CPD algorithm
     for i in xrange(d['num_bootstraps']):
-        
-        print 'Starting analysis...'
-        
+                        
         # Bootstrap the data for each year
         bootstrap_flag=(False if i==0 else True)
         if bootstrap_flag==False:
@@ -265,6 +264,11 @@ def CPD_plot_hist(S,mu,sig,crit_t,year,plot_out):
     plt.xlabel(r'u* ($m\/s^{-1}$)',fontsize=16)
     plt.axvline(x=mu-sig*crit_t,color='black',linestyle='--')
     plt.axvline(x=mu+sig*crit_t,color='black',linestyle='--')
+    plt.axvline(x=mu,color='black',linestyle='dotted')
+    props = dict(boxstyle='round,pad=1', facecolor='white', alpha=0.5)
+    txt='mean u*='+str(mu)
+    ax=plt.gca()
+    plt.text(0.4,0.1,txt,bbox=props,fontsize=12,verticalalignment='top',transform=ax.transAxes)
     plt.legend(loc='upper left')
     plt.title(str(year)+'\n')
     plot_out_name='ustar'+str(year)+'.jpg'
@@ -378,7 +382,6 @@ def CPD_run():
     # Read .nc file
     nc_obj=netCDF4.Dataset(file_in)
     flux_frequency=int(nc_obj.time_step)
-    pdb.set_trace()
     dates_list=[dt.datetime(*xlrd.xldate_as_tuple(elem,0)) for elem in nc_obj.variables['xlDateTime']]
     d={}
     for i in vars_all:

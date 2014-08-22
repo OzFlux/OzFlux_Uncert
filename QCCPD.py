@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 import os
+import pdb
 
 #------------------------------------------------------------------------------
 # Return a bootstrapped sample of the passed dataframe
@@ -131,7 +132,7 @@ def CPD_main():
         # try: may be insufficient data, needs to be handled; if insufficient on first pass then return empty,otherwise next pass
         # this will be a marginal case, will almost always be enough data in bootstraps if enough in obs data
         years_df,seasons_df,results_df=CPD_sort(temp_df,d['flux_frequency'],years_index)
-                
+        
         # Use the results df index as an iterator to run the CPD algorithm on the year/season/temperature strata
         print 'Finding change points...'
         cols=['bMod_threshold','bMod_f_max','b0','b1','bMod_CP',
@@ -140,6 +141,9 @@ def CPD_main():
                               columns=cols,index=results_df.index)
         results_df=results_df.join(stats_df)        
         print 'Done!'
+        
+        results_df['bMod_CP']=results_df['bMod_CP'].astype(int)
+        results_df['aMod_CP']=results_df['aMod_CP'].astype(int)
         
         # QC the results
         print 'Doing within-sample QC...'

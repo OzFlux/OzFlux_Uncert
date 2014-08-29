@@ -154,7 +154,7 @@ def CPD_main():
         if bootstrap_flag==False:
             if 'results_output_path' in d.keys(): 
                 print 'Outputting results for all years / seasons / T classes in observational dataset'
-                results_df.to_csv(os.path.join(d['results_output_path'],'Observational_u*_threshold_statistics.csv'))
+                results_df.to_csv(os.path.join(d['results_output_path'],'Observational_ustar_threshold_statistics.csv'))
             if 'plot_output_path' in d.keys(): 
                 print 'Doing plotting for observational data'
                 for j in results_df.index:
@@ -503,3 +503,6 @@ def CPD_stats(df,stats_df):
             
     return stats_df
 #------------------------------------------------------------------------------
+    
+if __name__=='__main__':
+    test=CPD_main()

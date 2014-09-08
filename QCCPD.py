@@ -11,7 +11,6 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 import os
-import pdb
 
 #------------------------------------------------------------------------------
 # Return a bootstrapped sample of the passed dataframe
@@ -103,10 +102,10 @@ def CPD_fit(temp_df):
 # Coordinate steps in CPD process
 def CPD_main():
 
-    df,d=CPD_run()
+    master_df,d=CPD_run()
 
     # Find number of years in df    
-    years_index=list(set(df.index.year))
+    years_index=list(set(master_df.index.year))
     
     # Create df to keep counts of total samples and QC passed samples
     counts_df=pd.DataFrame(index=years_index,columns=['Total'])
@@ -120,9 +119,10 @@ def CPD_main():
         # Bootstrap the data for each year
         bootstrap_flag=(False if i==0 else True)
         if bootstrap_flag==False:
+            df=master_df            
             print 'Analysing observational data for first pass'
         else:
-            df=pd.concat([CPD_bootstrap(df.ix[str(j)]) for j in years_index])
+            df=pd.concat([CPD_bootstrap(master_df.ix[str(j)]) for j in years_index])
             print 'Analysing bootstrap '+str(i)
         
         # Create nocturnal dataframe (drop all records where any one of the variables is NaN)
@@ -429,11 +429,12 @@ def CPD_sort(df,fluxfreq,years_index):
     years_df['Fc_count']=df['Fc'].groupby([lambda x: x.year]).count()
     years_df['seasons']=[years_df['Fc_count'].ix[j]/(bin_size/2)-1 for j in years_df.index]
     years_df['seasons'].fillna(0,inplace=True)
+    years_df['seasons']=np.where(years_df['seasons']<0,0,years_df['seasons'])
     years_df['seasons']=years_df['seasons'].astype(int)
-    if np.all(years_df['seasons']==0):
+    if np.all(years_df['seasons']<=0):
         print 'No years with sufficient data for evaluation. Exiting...'
         return
-    elif np.any(years_df['seasons']==0):
+    elif np.any(years_df['seasons']<=0):
         exclude_years_list=years_df[years_df['seasons']<=0].index.tolist()
         exclude_years_str= ','.join(map(str,exclude_years_list))
         print 'Insufficient data for evaluation in the following years: '+exclude_years_str+' (excluded from analysis)'

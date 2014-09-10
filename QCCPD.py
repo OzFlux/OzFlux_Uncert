@@ -490,17 +490,18 @@ def CPD_stats(df,stats_df):
     
     # Calculate stats
     for i in stats_df.index:
-        if isinstance(df['bMod_threshold'].ix[i],pd.Series):
-            temp=stats.describe(df['bMod_threshold'].ix[i])
-            stats_df['ustar_mean'].ix[i]=temp[2]
-            stats_df['ustar_sig'].ix[i]=np.sqrt(temp[3])
-            stats_df['crit_t'].ix[i]=stats.t.ppf(1-0.025,temp[0])
-            stats_df['95%CI_lower'].ix[i]=stats_df['ustar_mean'].ix[i]-stats_df['ustar_sig'].ix[i]*stats_df['crit_t'].ix[i]
-            stats_df['95%CI_upper'].ix[i]=stats_df['ustar_mean'].ix[i]+stats_df['ustar_sig'].ix[i]*stats_df['crit_t'].ix[i]
-            stats_df['skew'].ix[i]=temp[4]
-            stats_df['kurt'].ix[i]=temp[5]
-        else:
-            stats_df['ustar_mean'].ix[i]=df['bMod_threshold'].ix[i]
+        if stats_df['b_valid'].ix[i]:
+            if isinstance(df['bMod_threshold'].ix[i],pd.Series):
+                temp=stats.describe(df['bMod_threshold'].ix[i])
+                stats_df['ustar_mean'].ix[i]=temp[2]
+                stats_df['ustar_sig'].ix[i]=np.sqrt(temp[3])
+                stats_df['crit_t'].ix[i]=stats.t.ppf(1-0.025,temp[0])
+                stats_df['95%CI_lower'].ix[i]=stats_df['ustar_mean'].ix[i]-stats_df['ustar_sig'].ix[i]*stats_df['crit_t'].ix[i]
+                stats_df['95%CI_upper'].ix[i]=stats_df['ustar_mean'].ix[i]+stats_df['ustar_sig'].ix[i]*stats_df['crit_t'].ix[i]
+                stats_df['skew'].ix[i]=temp[4]
+                stats_df['kurt'].ix[i]=temp[5]
+            else:
+                stats_df['ustar_mean'].ix[i]=df['bMod_threshold'].ix[i]
             
     return stats_df
 #------------------------------------------------------------------------------

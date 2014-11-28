@@ -391,7 +391,11 @@ def CPD_run():
     dates_list=[dt.datetime(*xlrd.xldate_as_tuple(elem,0)) for elem in nc_obj.variables['xlDateTime']]
     d={}
     for i in vars_all:
-        d[i]=nc_obj.variables[i][:]
+        ndims=len(nc_obj.variables[i].shape)
+        if ndims==3:
+            d[i]=nc_obj.variables[i][:,0,0]
+        elif ndims==1:    
+            d[i]=nc_obj.variables[i][:]
     nc_obj.close()
     df=pd.DataFrame(d,index=dates_list)    
         

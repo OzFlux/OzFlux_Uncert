@@ -35,9 +35,9 @@ def linear_plot(cats_df,linreg_stats_df,num_classes,ax):
     
     # Create series for regression lines
     influx_x=cats_df['Fc_mean'][cats_df['Fc_mean']<=0]
-    influx_y=np.polyval([linreg_stats_df.ix['influx'][0],linreg_stats_df.ix['influx'][1]],influx_x)
+    influx_y=np.polyval([linreg_stats_df.ix['day'][0],linreg_stats_df.ix['day'][1]],influx_x)
     efflux_x=cats_df['Fc_mean'][cats_df['Fc_mean']>=0]
-    efflux_y=np.polyval([linreg_stats_df.ix['efflux'][0],linreg_stats_df.ix['efflux'][1]],efflux_x)
+    efflux_y=np.polyval([linreg_stats_df.ix['noct'][0],linreg_stats_df.ix['noct'][1]],efflux_x)
     
     # Do plotting
     ax.plot(cats_df['Fc_mean'],cats_df['sig_del'],'ro')
@@ -48,16 +48,16 @@ def linear_plot(cats_df,linreg_stats_df,num_classes,ax):
     ax.set_title('Random error SD binned over flux magnitude quantiles (n='+str(num_classes)+')\n')
     
     # Move axis and relabel
-    str_influx=('a='+str(round(linreg_stats_df.ix['influx'][0],2))+
-                '\nb='+str(round(linreg_stats_df.ix['influx'][1],2))+
-                '\nr$^2$='+str(round(linreg_stats_df.ix['influx'][2],2))+
-                '\np='+str(round(linreg_stats_df.ix['influx'][3],2))+
-                '\nSE='+str(round(linreg_stats_df.ix['influx'][4],2)))
-    str_efflux=('a='+str(round(linreg_stats_df.ix['efflux'][0],2))+
-                '\nb='+str(round(linreg_stats_df.ix['efflux'][1],2))+
-                '\nr$^2$='+str(round(linreg_stats_df.ix['efflux'][2],2))+
-                '\np='+str(round(linreg_stats_df.ix['efflux'][3],2))+
-                '\nSE='+str(round(linreg_stats_df.ix['efflux'][4],2)))
+    str_influx=('a='+str(round(linreg_stats_df.ix['day'][0],2))+
+                '\nb='+str(round(linreg_stats_df.ix['day'][1],2))+
+                '\nr$^2$='+str(round(linreg_stats_df.ix['day'][2],2))+
+                '\np='+str(round(linreg_stats_df.ix['day'][3],2))+
+                '\nSE='+str(round(linreg_stats_df.ix['day'][4],2)))
+    str_efflux=('a='+str(round(linreg_stats_df.ix['noct'][0],2))+
+                '\nb='+str(round(linreg_stats_df.ix['noct'][1],2))+
+                '\nr$^2$='+str(round(linreg_stats_df.ix['noct'][2],2))+
+                '\np='+str(round(linreg_stats_df.ix['noct'][3],2))+
+                '\nSE='+str(round(linreg_stats_df.ix['noct'][4],2)))
     props = dict(boxstyle='round', facecolor='white', alpha=0.5)
     ax.text(0.05, 0.35, str_influx, transform=ax.transAxes, fontsize=12,
             verticalalignment='top',bbox=props)
@@ -77,6 +77,7 @@ def error_main(Fc_diff,cats_df,linreg_stats_df,num_classes):
     print 'Plotting: 1) PDF of random error'
     print '          2) sigma_delta (variance of random error) as a function of flux magnitude'
     fig, (ax1, ax2) = plt.subplots(nrows=2)
+    fig.patch.set_facecolor('white')
     hist_plot(Fc_diff, ax1)
     linear_plot(cats_df,linreg_stats_df,num_classes,ax2)
     fig.tight_layout()

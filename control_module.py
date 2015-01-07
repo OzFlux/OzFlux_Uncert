@@ -25,7 +25,11 @@ def get_nc(file_in):
     # Get the data from the file
     d={}
     for i in nc_obj.variables.keys():
-        d[i]=nc_obj.variables[i][:]
+        ndims=len(nc_obj.variables[i].shape)
+        if ndims==3:
+            d[i]=nc_obj.variables[i][:,0,0]
+        elif ndims==1:    
+            d[i]=nc_obj.variables[i][:]
     nc_obj.close()
     return pd.DataFrame(d,index=dates_list)
 

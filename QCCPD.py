@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 import os
+import pdb
 
 #------------------------------------------------------------------------------
 # Return a bootstrapped sample of the passed dataframe
@@ -122,7 +123,7 @@ def CPD_main():
             df=master_df            
             print 'Analysing observational data for first pass'
         else:
-            df=pd.concat([CPD_bootstrap(master_df.ix[str(j)]) for j in years_index])
+            df=pd.concat([CPD_bootstrap(master_df.loc[str(j)]) for j in years_index])
             print 'Analysing bootstrap '+str(i)
         
         # Create nocturnal dataframe (drop all records where any one of the variables is NaN)
@@ -132,12 +133,12 @@ def CPD_main():
         # try: may be insufficient data, needs to be handled; if insufficient on first pass then return empty,otherwise next pass
         # this will be a marginal case, will almost always be enough data in bootstraps if enough in obs data
         years_df,seasons_df,results_df=CPD_sort(temp_df,d['flux_frequency'],years_index)
-        
+
         # Use the results df index as an iterator to run the CPD algorithm on the year/season/temperature strata
         print 'Finding change points...'
         cols=['bMod_threshold','bMod_f_max','b0','b1','bMod_CP',
               'aMod_threshold','aMod_f_max','a0','a1','a2','norm_a1','norm_a2','aMod_CP','a1p','a2p']
-        stats_df=pd.DataFrame(np.vstack([CPD_fit(seasons_df.ix[j]) for j in results_df.index]),                      
+        stats_df=pd.DataFrame(np.vstack([CPD_fit(seasons_df.loc[j]) for j in results_df.index]),                      
                               columns=cols,index=results_df.index)
         results_df=results_df.join(stats_df)        
         print 'Done!'
@@ -158,7 +159,7 @@ def CPD_main():
             if 'plot_output_path' in d.keys(): 
                 print 'Doing plotting for observational data'
                 for j in results_df.index:
-                    CPD_plot_fits(seasons_df.ix[j],results_df.ix[j],d['plot_output_path'])
+                    CPD_plot_fits(seasons_df.loc[j],results_df.loc[j],d['plot_output_path'])
         
         # Drop the season and temperature class levels from the hierarchical index, 
         # drop all cases that failed QC
@@ -174,7 +175,7 @@ def CPD_main():
         
         # Iterate counters for each year for each bootstrap
         for i in years_df.index:
-            counts_df['Total'].ix[i]=counts_df['Total'].ix[i]+years_df['seasons'].ix[i]*4
+            counts_df['Total'].loc[i]=counts_df['Total'].loc[i]+years_df['seasons'].loc[i]*4
     
     print 'Finished change point detection for all bootstraps'
     print 'Starting QC'    
@@ -183,7 +184,7 @@ def CPD_main():
     all_results_df.sort_index(inplace=True)
     
     # Drop all years with no data remaining after QC, and return nothing if all years were dropped
-    [counts_df.drop(i,inplace=True) for i in counts_df.index if counts_df['Total'].ix[i]==0]    
+    [counts_df.drop(i,inplace=True) for i in counts_df.index if counts_df['Total'].loc[i]==0]    
     if counts_df.empty:
         print 'Insufficient data for analysis... exiting'
         return
@@ -201,10 +202,10 @@ def CPD_main():
     #                             2) normalised a1 and a2 values
     if 'plot_output_path' in d.keys():
         print 'Plotting u* histograms for all valid b model thresholds for all valid years'
-        [CPD_plot_hist(all_results_df['bMod_threshold'].ix[j][all_results_df['b_valid'].ix[j]==True],
-                       output_stats_df['ustar_mean'].ix[j],
-                       output_stats_df['ustar_sig'].ix[j],
-                       output_stats_df['crit_t'].ix[j],
+        [CPD_plot_hist(all_results_df['bMod_threshold'].loc[j][all_results_df['b_valid'].loc[j]==True],
+                       output_stats_df['ustar_mean'].loc[j],
+                       output_stats_df['ustar_sig'].loc[j],
+                       output_stats_df['crit_t'].loc[j],
                        j, d['plot_output_path'])
          for j in output_stats_df.index]
         
@@ -316,8 +317,8 @@ def CPD_QC1(QC1_df):
     neg_slope=neg_slope.fillna(0)
     neg_slope=neg_slope/total_count*100
     for i in neg_slope.index:
-        sign=1 if neg_slope.ix[i]<50 else -1
-        QC1_df['major_mode'].ix[i]=np.sign(np.array(QC1_df['b1'].ix[i]))==sign
+        sign=1 if neg_slope.loc[i]<50 else -1
+        QC1_df['major_mode'].loc[i]=np.sign(np.array(QC1_df['b1'].loc[i]))==sign
     
     # Make invalid (False) all b_model cases where: 1) fit not significantly better than null model; 
     #                                               2) best fit at extreme ends;
@@ -355,8 +356,8 @@ def CPD_QC2(df,output_df,bootstrap_n):
     output_df['a_valid']=(~(np.isnan(output_df['norm_a1_median']))&(~np.isnan(output_df['norm_a2_median'])))
     output_df['b_valid']=(output_df['QCpass']>(4*bootstrap_n))&(output_df['QCpass_prop']>0.2)
     for i in output_df.index:
-        if output_df['a_valid'].ix[i]==False: print 'Insufficient valid cases for robust diagnostic (a model) u* determination in year '+str(i)
-        if output_df['b_valid'].ix[i]==False: print 'Insufficient valid cases for robust operational (b model) u* determination in year '+str(i)
+        if output_df['a_valid'].loc[i]==False: print 'Insufficient valid cases for robust diagnostic (a model) u* determination in year '+str(i)
+        if output_df['b_valid'].loc[i]==False: print 'Insufficient valid cases for robust operational (b model) u* determination in year '+str(i)
  
     return output_df    
     
@@ -433,7 +434,7 @@ def CPD_sort(df,fluxfreq,years_index):
     # Create a df containing count stats for the variables for all available years
     years_df=pd.DataFrame(index=years_index)
     years_df['Fc_count']=df['Fc'].groupby([lambda x: x.year]).count()
-    years_df['seasons']=[years_df['Fc_count'].ix[j]/(bin_size/2)-1 for j in years_df.index]
+    years_df['seasons']=[years_df['Fc_count'].loc[j]/(bin_size/2)-1 for j in years_df.index]
     years_df['seasons'].fillna(0,inplace=True)
     years_df['seasons']=np.where(years_df['seasons']<0,0,years_df['seasons'])
     years_df['seasons']=years_df['seasons'].astype(int)
@@ -447,17 +448,30 @@ def CPD_sort(df,fluxfreq,years_index):
         years_df=years_df[years_df['seasons']>0]
     
     # Extract overlapping series, sort by temperature and concatenate
-    seasons_df=pd.concat([pd.concat([df.ix[str(i)].iloc[j*(bin_size/2):j*(bin_size/2)+bin_size].sort('Ta',axis=0) 
-                                     for j in xrange(years_df['seasons'].ix[i])]) 
-                                     for i in years_df.index])
+    # Note .ix is required for some reason; .loc won't work (may be a bug)
+    lst=[]
+    for year in years_df.index:
+        for season in xrange(years_df['seasons'].loc[year]):
+            start_ind=season*(bin_size/2)
+            end_ind=season*(bin_size/2)+bin_size
+            lst.append(df.ix[str(year)].iloc[start_ind:end_ind].sort('Ta',axis=0))
+    seasons_df=pd.concat([dataframe for dataframe in lst])
 
-    # Make a hierarchical index for year, season, temperature class for the seasons dataframe
-    years_index=np.concatenate([np.int32(np.ones(years_df['seasons'].ix[i]*bin_size)*i) 
-                                for i in years_df.index])
-    seasons_index=np.concatenate([np.concatenate([np.int32(np.ones(bin_size)*(i+1)) 
-                                  for i in xrange(years_df['seasons'].ix[j])]) for j in years_df.index])
-    Tclass_index=np.tile(np.concatenate([np.int32(np.ones(bin_size/4)*(i+1)) 
-                                         for i in xrange(4)]),len(seasons_index)/bin_size)
+    # Make a hierarchical index for year, season, temperature class, bin for the seasons dataframe
+    # Do year
+    years_index=np.concatenate([np.int32(np.ones(years_df['seasons'].loc[year]*bin_size)*year) 
+                                for year in years_df.index])
+    
+    # Do season                                
+    seasons_index=np.concatenate([np.concatenate([np.int32(np.ones(bin_size)*(season+1)) 
+                                                  for season in xrange(years_df['seasons'].loc[year])]) 
+                                                  for year in years_df.index])
+
+    # Do temperature class    
+    Tclass_index=np.tile(np.concatenate([np.int32(np.ones(bin_size/4)*(i+1)) for i in xrange(4)]),
+                         len(seasons_index)/bin_size)
+    
+    # Do bin
     bin_index=np.tile(np.int32(np.arange(bin_size/4)/(bin_size/200)),len(seasons_df)/(bin_size/4))
     arrays=[years_index,seasons_index,Tclass_index]
     tuples=list(zip(*arrays))
@@ -466,7 +480,7 @@ def CPD_sort(df,fluxfreq,years_index):
     
     # Set up the results df, sort the seasons by ustar, then bin average and drop the bin level from the index
     results_df=pd.DataFrame({'T_avg':seasons_df['Ta'].groupby(level=['year','season','T_class']).mean()})
-    seasons_df=pd.concat([seasons_df.ix[i[0]].ix[i[1]].ix[i[2]].sort('ustar',axis=0) for i in results_df.index])
+    seasons_df=pd.concat([seasons_df.loc[i[0]].loc[i[1]].loc[i[2]].sort('ustar',axis=0) for i in results_df.index])
     seasons_df.index=hierarchical_index
     seasons_df=seasons_df.set_index(bin_index,append=True)
     seasons_df.index.names=['year','season','T_class','bin']
@@ -496,18 +510,18 @@ def CPD_stats(df,stats_df):
     
     # Calculate stats
     for i in stats_df.index:
-        if stats_df['b_valid'].ix[i]:
-            if isinstance(df['bMod_threshold'].ix[i],pd.Series):
-                temp=stats.describe(df['bMod_threshold'].ix[i])
-                stats_df['ustar_mean'].ix[i]=temp[2]
-                stats_df['ustar_sig'].ix[i]=np.sqrt(temp[3])
-                stats_df['crit_t'].ix[i]=stats.t.ppf(1-0.025,temp[0])
-                stats_df['95%CI_lower'].ix[i]=stats_df['ustar_mean'].ix[i]-stats_df['ustar_sig'].ix[i]*stats_df['crit_t'].ix[i]
-                stats_df['95%CI_upper'].ix[i]=stats_df['ustar_mean'].ix[i]+stats_df['ustar_sig'].ix[i]*stats_df['crit_t'].ix[i]
-                stats_df['skew'].ix[i]=temp[4]
-                stats_df['kurt'].ix[i]=temp[5]
+        if stats_df['b_valid'].loc[i]:
+            if isinstance(df['bMod_threshold'].loc[i],pd.Series):
+                temp=stats.describe(df['bMod_threshold'].loc[i])
+                stats_df['ustar_mean'].loc[i]=temp[2]
+                stats_df['ustar_sig'].loc[i]=np.sqrt(temp[3])
+                stats_df['crit_t'].loc[i]=stats.t.ppf(1-0.025,temp[0])
+                stats_df['95%CI_lower'].loc[i]=stats_df['ustar_mean'].loc[i]-stats_df['ustar_sig'].loc[i]*stats_df['crit_t'].loc[i]
+                stats_df['95%CI_upper'].loc[i]=stats_df['ustar_mean'].loc[i]+stats_df['ustar_sig'].loc[i]*stats_df['crit_t'].loc[i]
+                stats_df['skew'].loc[i]=temp[4]
+                stats_df['kurt'].loc[i]=temp[5]
             else:
-                stats_df['ustar_mean'].ix[i]=df['bMod_threshold'].ix[i]
+                stats_df['ustar_mean'].loc[i]=df['bMod_threshold'].loc[i]
             
     return stats_df
 #------------------------------------------------------------------------------

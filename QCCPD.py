@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 # Python modules
 import Tkinter, tkFileDialog
 from configobj import ConfigObj
@@ -173,7 +175,7 @@ def main():
     Bohrer, G., Dragoni, D., Fischer, M.L., Gu, L., Law, B.E., Margolis, H.A., McCaughey, J.H., 
     Munger, J.W., Oechel, W., Schaeffer, K., 2013. Use of change-point detection for 
     friction–velocity threshold evaluation in eddy-covariance studies. 
-    Agric. For. Meteorol. 171-172, 31–45. doi:10.1016/j.agrformet.2012.11.023    
+    Agric. For. Meteorol. 171-172, 31–45. doi:10.1016/j.agrformet.2012.11.023
     
     Still to do:
         - calculation of f-statistic limits for passing QC
@@ -223,12 +225,12 @@ def main():
         
         results_df['bMod_CP'] = results_df['bMod_CP'].astype(int)
         results_df['aMod_CP'] = results_df['aMod_CP'].astype(int)
-        
+
         # QC the results
         print 'Doing within-sample QC...'
         results_df = QC1(results_df)
         print 'Done!' 
-        
+
         # Output results and plots (if user has set output flags in config file to true)
         if bootstrap_flag == False:
             if 'results_output_path' in d.keys(): 
@@ -238,7 +240,7 @@ def main():
                 print 'Doing plotting for observational data'
                 for j in results_df.index:
                     plot_fits(seasons_df.loc[j], results_df.loc[j], d['plot_output_path'])
-        
+
         # Drop the season and temperature class levels from the hierarchical index, 
         # drop all cases that failed QC
         results_df = results_df.reset_index(level=['season', 'T_class'], drop = True)
@@ -254,7 +256,7 @@ def main():
         # Iterate counters for each year for each bootstrap
         for i in years_df.index:
             counts_df['Total'].loc[i] = counts_df['Total'].loc[i] + years_df['seasons'].loc[i] * 4
-    
+
     print 'Finished change point detection for all bootstraps'
     print 'Starting QC'    
     
@@ -265,7 +267,7 @@ def main():
     [counts_df.drop(i,inplace=True) for i in counts_df.index if counts_df['Total'].loc[i] == 0]    
     if counts_df.empty:
         sys.exit('Insufficient data for analysis... exiting')
-            
+
     # QC the combined results
     print 'Doing cross-sample QC...'
     output_stats_df = QC2(all_results_df, counts_df, d['num_bootstraps'])
@@ -273,7 +275,7 @@ def main():
 
     # Calculate final values
     print 'Calculating final results' 
-    output_stats_df = stats(all_results_df, output_stats_df)    
+    output_stats_df = stats_calc(all_results_df, output_stats_df)    
     
     # If requested by user, plot: 1) histograms of u* thresholds for each year; 
     #                             2) normalised a1 and a2 values
@@ -385,34 +387,35 @@ def QC1(QC1_df):
     fmax_a_threshold = 6.9
     fmax_b_threshold = 6.9
     
-    QC1_df['major_mode']=True
-    
+    QC1_df['major_mode'] = True
+
     # For each year, find all cases that belong to minority mode (i.e. mode is sign of slope below change point)
-    total_count=QC1_df['bMod_threshold'].groupby(level='year').count()
-    neg_slope=QC1_df['bMod_threshold'][QC1_df['b1']<0].groupby(level='year').count()
-    neg_slope=neg_slope.reindex(total_count.index)
-    neg_slope=neg_slope.fillna(0)
-    neg_slope=neg_slope/total_count*100
+    total_count = QC1_df['bMod_threshold'].groupby(level = 'year').count()
+    neg_slope = QC1_df['bMod_threshold'][QC1_df['b1'] < 0].groupby(level = 'year').count()
+    neg_slope = neg_slope.reindex(total_count.index)
+    neg_slope = neg_slope.fillna(0)
+    neg_slope = neg_slope/total_count * 100
     for i in neg_slope.index:
-        sign=1 if neg_slope.loc[i]<50 else -1
-        QC1_df['major_mode'].loc[i]=np.sign(np.array(QC1_df['b1'].loc[i]))==sign
+        sign = 1 if neg_slope.loc[i] < 50 else -1
+        QC1_df.loc[i, 'major_mode'] = np.sign(np.array(QC1_df['b1'].loc[i])) == sign
     
     # Make invalid (False) all b_model cases where: 1) fit not significantly better than null model; 
     #                                               2) best fit at extreme ends;
     #                                               3) case belongs to minority mode (for that year)
-    QC1_df['b_valid']=((QC1_df['bMod_f_max']>fmax_b_threshold)
-                       &(QC1_df['bMod_CP']>4)
-                       &(QC1_df['bMod_CP']<45)
-                       &(QC1_df['major_mode']==True))
-        
+    QC1_df['b_valid'] = ((QC1_df['bMod_f_max'] > fmax_b_threshold)
+                         & (QC1_df['bMod_CP'] > 4)
+                         & (QC1_df['bMod_CP'] < 45)
+                         & (QC1_df['major_mode'] == True))
+
     # Make invalid (False) all a_model cases where: 1) fit not significantly better than null model; 
     #                                               2) slope below change point not statistically significant;
     #                                               3) slope above change point statistically significant
-    QC1_df['a_valid']=((QC1_df['aMod_f_max']>fmax_a_threshold)
-                       &(QC1_df['a1p']<0.05)&(QC1_df['a2p']>0.05))
-    
+    QC1_df['a_valid'] = ((QC1_df['aMod_f_max'] > fmax_a_threshold)
+                         & (QC1_df['a1p'] < 0.05)
+                         & (QC1_df['a2p'] > 0.05))
+
     # Return the results df
-    QC1_df=QC1_df.drop('major_mode', axis=1)
+    QC1_df = QC1_df.drop('major_mode', axis = 1)
     return QC1_df
     
 #------------------------------------------------------------------------------
@@ -428,7 +431,7 @@ def QC2(df,output_df,bootstrap_n):
     # Get the proportion of all available cases that passed QC for b model   
     output_df['QCpass']=df['bMod_threshold'][df['b_valid']==True].groupby(df[df['b_valid']==True].index).count()
     output_df['QCpass_prop']=output_df['QCpass']/output_df['Total']
-       
+    
     # Identify years where either diagnostic or operational model did not find enough good data for robust estimate
     output_df['a_valid']=(~(np.isnan(output_df['norm_a1_median']))&(~np.isnan(output_df['norm_a2_median'])))
     output_df['b_valid']=(output_df['QCpass']>(4*bootstrap_n))&(output_df['QCpass_prop']>0.2)
@@ -512,36 +515,40 @@ def sort(df, flux_period, years_index):
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
-def stats(df,stats_df):
+def stats_calc(df,stats_df):
     
     # Add statistics vars to output df
-    stats_df['ustar_mean']=np.nan
-    stats_df['ustar_sig']=np.nan
-    stats_df['ustar_n']=np.nan
-    stats_df['crit_t']=np.nan
-    stats_df['95%CI_lower']=np.nan
-    stats_df['95%CI_upper']=np.nan
-    stats_df['skew']=np.nan
-    stats_df['kurt']=np.nan
+    stats_df['ustar_mean'] = np.nan
+    stats_df['ustar_sig'] = np.nan
+    stats_df['ustar_n'] = np.nan
+    stats_df['crit_t'] = np.nan
+    stats_df['95%CI_lower'] = np.nan
+    stats_df['95%CI_upper'] = np.nan
+    stats_df['skew'] = np.nan
+    stats_df['kurt'] = np.nan
         
     # Drop data that failed b model, then drop b model boolean variable
     df=df[df['b_valid']==True]
     df=df.drop('b_valid',axis=1)
-    
+ 
     # Calculate stats
     for i in stats_df.index:
         if stats_df['b_valid'].loc[i]:
             if isinstance(df['bMod_threshold'].loc[i],pd.Series):
-                temp=stats.describe(df['bMod_threshold'].loc[i])
-                stats_df['ustar_mean'].loc[i]=temp[2]
-                stats_df['ustar_sig'].loc[i]=np.sqrt(temp[3])
-                stats_df['crit_t'].loc[i]=stats.t.ppf(1-0.025,temp[0])
-                stats_df['95%CI_lower'].loc[i]=stats_df['ustar_mean'].loc[i]-stats_df['ustar_sig'].loc[i]*stats_df['crit_t'].loc[i]
-                stats_df['95%CI_upper'].loc[i]=stats_df['ustar_mean'].loc[i]+stats_df['ustar_sig'].loc[i]*stats_df['crit_t'].loc[i]
-                stats_df['skew'].loc[i]=temp[4]
-                stats_df['kurt'].loc[i]=temp[5]
+                temp = stats.describe(df['bMod_threshold'].loc[i])
+                stats_df.loc[i, 'ustar_mean'] = temp[2]
+                stats_df.loc[i, 'ustar_sig'] = np.sqrt(temp[3])
+                stats_df.loc[i, 'crit_t'] = stats.t.ppf(1 - 0.025, temp[0])
+                stats_df.loc[i, '95%CI_lower'] = (stats_df['ustar_mean'].loc[i] - 
+                                                  stats_df['ustar_sig'].loc[i] * 
+                                                  stats_df['crit_t'].loc[i])
+                stats_df.loc[i, '95%CI_upper'] = (stats_df['ustar_mean'].loc[i] + 
+                                                  stats_df['ustar_sig'].loc[i] *
+                                                  stats_df['crit_t'].loc[i])
+                stats_df.loc[i, 'skew'] = temp[4]
+                stats_df.loc[i, 'kurt'] = temp[5]
             else:
-                stats_df['ustar_mean'].loc[i]=df['bMod_threshold'].loc[i]
+                stats_df.loc[i, 'ustar_mean'] = df['bMod_threshold'].loc[i]
             
     return stats_df
 #------------------------------------------------------------------------------

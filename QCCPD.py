@@ -27,7 +27,10 @@ def fit(temp_df):
     
     # Only works if the index is reset here (bug?)!
     temp_df=temp_df.reset_index(drop=True)
-       
+    
+    # Processing 30x faster if dtype-float64...
+    temp_df = temp_df.astype(np.float64)        
+    
     ### Calculate null model SSE for operational (b) and diagnostic (a) model
     SSE_null_b=((temp_df['Fc']-temp_df['Fc'].mean())**2).sum() # b model SSE
     alpha0,alpha1=stats.linregress(temp_df['ustar'],temp_df['Fc'])[:2] # a model regression
@@ -95,7 +98,7 @@ def fit(temp_df):
     a2p=reg_params.p_value['ustar_alt2']
     norm_a1=a1*(ustar_threshold_a/(a0+a1*ustar_threshold_a))
     norm_a2=a2*(ustar_threshold_a/(a0+a1*ustar_threshold_a))
-
+    
     # Return results
     return [ustar_threshold_b,f_b_max,b0,b1,change_point_b,
             ustar_threshold_a,f_a_max,a0,a1,a2,norm_a1,norm_a2,change_point_a,a1p,a2p]
@@ -213,13 +216,16 @@ def main():
         # try: may be insufficient data, needs to be handled; if insufficient on first pass then return empty,otherwise next pass
         # this will be a marginal case, will almost always be enough data in bootstraps if enough in obs data
         years_df, seasons_df, results_df = sort(temp_df, d['flux_period'], years_index)
-
+        
         # Use the results df index as an iterator to run the CPD algorithm on the year/season/temperature strata
         print 'Finding change points...'
         cols = ['bMod_threshold','bMod_f_max','b0','b1','bMod_CP',
                 'aMod_threshold','aMod_f_max','a0','a1','a2','norm_a1','norm_a2','aMod_CP','a1p','a2p']
-        stats_df = pd.DataFrame(np.vstack([fit(seasons_df.loc[j]) for j in results_df.index]),                      
-                                columns = cols, index = results_df.index)
+        lst = []
+        for j in results_df.index:
+            temp_df = seasons_df.loc[j].copy()
+            lst.append(fit(temp_df))
+        stats_df = pd.DataFrame(np.vstack(lst), columns = cols, index = results_df.index)
         results_df = results_df.join(stats_df)
         print 'Done!'
         
@@ -255,7 +261,7 @@ def main():
         
         # Iterate counters for each year for each bootstrap
         for i in years_df.index:
-            counts_df['Total'].loc[i] = counts_df['Total'].loc[i] + years_df['seasons'].loc[i] * 4
+            counts_df.loc[i, 'Total'] = counts_df.loc[i, 'Total'] + years_df.loc[i, 'seasons'] * 4
 
     print 'Finished change point detection for all bootstraps'
     print 'Starting QC'    
@@ -264,7 +270,7 @@ def main():
     all_results_df.sort_index(inplace = True)
     
     # Drop all years with no data remaining after QC, and return nothing if all years were dropped
-    [counts_df.drop(i,inplace=True) for i in counts_df.index if counts_df['Total'].loc[i] == 0]    
+    [counts_df.drop(i,inplace=True) for i in counts_df.index if counts_df.loc[i, 'Total'] == 0]    
     if counts_df.empty:
         sys.exit('Insufficient data for analysis... exiting')
 
@@ -281,10 +287,10 @@ def main():
     #                             2) normalised a1 and a2 values
     if 'plot_output_path' in d.keys():
         print 'Plotting u* histograms for all valid b model thresholds for all valid years'
-        [plot_hist(all_results_df['bMod_threshold'].loc[j][all_results_df['b_valid'].loc[j] == True],
-                   output_stats_df['ustar_mean'].loc[j],
-                   output_stats_df['ustar_sig'].loc[j],
-                   output_stats_df['crit_t'].loc[j],
+        [plot_hist(all_results_df.loc[j, 'bMod_threshold'][all_results_df.loc[j, 'b_valid'] == True],
+                   output_stats_df.loc[j, 'ustar_mean'],
+                   output_stats_df.loc[j, 'ustar_sig'],
+                   output_stats_df.loc[j, 'crit_t'],
                    j, d['plot_output_path'])
          for j in output_stats_df.index]
         
@@ -397,7 +403,7 @@ def QC1(QC1_df):
     neg_slope = neg_slope/total_count * 100
     for i in neg_slope.index:
         sign = 1 if neg_slope.loc[i] < 50 else -1
-        QC1_df.loc[i, 'major_mode'] = np.sign(np.array(QC1_df['b1'].loc[i])) == sign
+        QC1_df.loc[i, 'major_mode'] = np.sign(np.array(QC1_df.loc[i, 'b1'])) == sign
     
     # Make invalid (False) all b_model cases where: 1) fit not significantly better than null model; 
     #                                               2) best fit at extreme ends;
@@ -459,7 +465,7 @@ def sort(df, flux_period, years_index):
     # Create a df containing count stats for the variables for all available years
     years_df = pd.DataFrame(index=years_index)
     years_df['Fc_count'] = df['Fc'].groupby([lambda x: x.year]).count()
-    years_df['seasons'] = [years_df['Fc_count'].loc[j]/(bin_size/2)-1 for j in years_df.index]
+    years_df['seasons'] = [years_df.loc[j, 'Fc_count']/(bin_size/2)-1 for j in years_df.index]
     years_df['seasons'].fillna(0, inplace=True)
     years_df['seasons'] = np.where(years_df['seasons'] < 0, 0, years_df['seasons'])
     years_df['seasons'] = years_df['seasons'].astype(int)
@@ -474,18 +480,18 @@ def sort(df, flux_period, years_index):
     # Extract overlapping series, sort by temperature and concatenate
     lst = []
     for year in years_df.index:
-        for season in xrange(years_df['seasons'].loc[year]):
+        for season in xrange(years_df.loc[year, 'seasons']):
             start_ind = season * (bin_size / 2)
             end_ind = season * (bin_size / 2) + bin_size
-            lst.append(df.loc[str(year)].iloc[start_ind:end_ind].sort('Ta', axis = 0))
+            lst.append(df.ix[str(year)].iloc[start_ind:end_ind].sort('Ta', axis = 0))
     seasons_df = pd.concat([frame for frame in lst])
 
     # Make a hierarchical index for year, season, temperature class, bin for the seasons dataframe
-    years_index=np.concatenate([np.int32(np.ones(years_df['seasons'].loc[year] * bin_size) * year) 
+    years_index=np.concatenate([np.int32(np.ones(years_df.loc[year, 'seasons'] * bin_size) * year) 
                                 for year in years_df.index])
     
     seasons_index=np.concatenate([np.concatenate([np.int32(np.ones(bin_size)*(season+1)) 
-                                                  for season in xrange(years_df['seasons'].loc[year])]) 
+                                                  for season in xrange(years_df.loc[year, 'seasons'])]) 
                                                   for year in years_df.index])
 
     Tclass_index=np.tile(np.concatenate([np.int32(np.ones(bin_size/4)*(i+1)) for i in xrange(4)]),
@@ -533,22 +539,22 @@ def stats_calc(df,stats_df):
  
     # Calculate stats
     for i in stats_df.index:
-        if stats_df['b_valid'].loc[i]:
-            if isinstance(df['bMod_threshold'].loc[i],pd.Series):
-                temp = stats.describe(df['bMod_threshold'].loc[i])
+        if stats_df.loc[i, 'b_valid']:
+            if isinstance(df.loc[i, 'bMod_threshold'],pd.Series):
+                temp = stats.describe(df.loc[i, 'bMod_threshold'])
                 stats_df.loc[i, 'ustar_mean'] = temp[2]
                 stats_df.loc[i, 'ustar_sig'] = np.sqrt(temp[3])
                 stats_df.loc[i, 'crit_t'] = stats.t.ppf(1 - 0.025, temp[0])
-                stats_df.loc[i, '95%CI_lower'] = (stats_df['ustar_mean'].loc[i] - 
-                                                  stats_df['ustar_sig'].loc[i] * 
-                                                  stats_df['crit_t'].loc[i])
-                stats_df.loc[i, '95%CI_upper'] = (stats_df['ustar_mean'].loc[i] + 
-                                                  stats_df['ustar_sig'].loc[i] *
-                                                  stats_df['crit_t'].loc[i])
+                stats_df.loc[i, '95%CI_lower'] = (stats_df.loc[i, 'ustar_mean'] - 
+                                                  stats_df.loc[i, 'ustar_sig'] * 
+                                                  stats_df.loc[i, 'crit_t'])
+                stats_df.loc[i, '95%CI_upper'] = (stats_df.loc[i, 'ustar_mean'] + 
+                                                  stats_df.loc[i, 'ustar_sig'] *
+                                                  stats_df.loc[i, 'crit_t'])
                 stats_df.loc[i, 'skew'] = temp[4]
                 stats_df.loc[i, 'kurt'] = temp[5]
             else:
-                stats_df.loc[i, 'ustar_mean'] = df['bMod_threshold'].loc[i]
+                stats_df.loc[i, 'ustar_mean'] = df.loc[i, 'bMod_threshold']
             
     return stats_df
 #------------------------------------------------------------------------------

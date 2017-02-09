@@ -281,7 +281,7 @@ def main():
 
     # Calculate final values
     print 'Calculating final results' 
-    output_stats_df = stats_calc(all_results_df, output_stats_df)    
+    output_stats_df = stats_calc(all_results_df, output_stats_df)
     
     # If requested by user, plot: 1) histograms of u* thresholds for each year; 
     #                             2) normalised a1 and a2 values
@@ -299,7 +299,8 @@ def main():
     
     # Output final stats if requested by user
     if 'results_output_path' in d.keys():
-        'Outputting final results'
+        print 'Outputting final results'
+        pdb.set_trace()
         output_stats_df.to_csv(os.path.join(d['results_output_path'], 'annual_statistics.csv'))    
     
     print 'Analysis complete!'
@@ -555,7 +556,8 @@ def stats_calc(df,stats_df):
                 stats_df.loc[i, 'kurt'] = temp[5]
             else:
                 stats_df.loc[i, 'ustar_mean'] = df.loc[i, 'bMod_threshold']
-            
+    stats_df.index.name = 'Year'
+                
     return stats_df
 #------------------------------------------------------------------------------
     

@@ -15,6 +15,7 @@ from scipy import stats
 import os
 import sys
 import pdb
+import statsmodels.formula.api as sm
 
 #------------------------------------------------------------------------------
 # Return a bootstrapped sample of the passed dataframe
@@ -23,59 +24,60 @@ def bootstrap(df):
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
-def fit(temp_df):
+def fit(df):
     
-    # Only works if the index is reset here (bug?)!
-    temp_df=temp_df.reset_index(drop=True)
-    
-    # Processing 30x faster if dtype-float64...
+    # Get stuff ready
+    temp_df = df.copy()
+    temp_df = temp_df.reset_index(drop = True)
     temp_df = temp_df.astype(np.float64)        
+    df_length = len(temp_df)
     
-    ### Calculate null model SSE for operational (b) and diagnostic (a) model
-    SSE_null_b=((temp_df['Fc']-temp_df['Fc'].mean())**2).sum() # b model SSE
-    alpha0,alpha1=stats.linregress(temp_df['ustar'],temp_df['Fc'])[:2] # a model regression
-    SSE_null_a=((temp_df['Fc']-(temp_df['ustar']*alpha0+alpha1))**2).sum() # a model SSE
+    # Calculate null model SSE for operational (b) and diagnostic (a) model
+    SSE_null_b = ((temp_df['Fc'] - temp_df['Fc'].mean())**2).sum()
+    alpha0 , alpha1 = stats.linregress(temp_df['ustar'], temp_df['Fc'])[:2]
+    SSE_null_a = ((temp_df['Fc'] - (temp_df['ustar'] * alpha0 + alpha1))**2).sum()
     
-    ### Create empty array to hold f statistics
-    f_a_array=np.empty(50)
-    f_b_array=np.empty(50)
+    # Create arrays to hold statistics
+    f_a_array = np.zeros(df_length)
+    f_b_array = np.zeros(df_length)
     
     # Add series to df for numpy linalg
-    temp_df['int']=np.ones(50)
+    temp_df['int'] = np.ones(df_length)
         
-    ### Iterate through all possible change points (1-49) as below
-    for i in xrange(1,49):
-        
-        # Operational (b) model
-        temp_df['ustar_alt']=temp_df['ustar'] # Add dummy variable to df
-        temp_df['ustar_alt'].iloc[i+1:]=temp_df['ustar_alt'].iloc[i]
-        reg_params=np.linalg.lstsq(temp_df[['int','ustar_alt']],temp_df['Fc'])[0] # Do linear regression
-        yHat=reg_params[0]+reg_params[1]*temp_df['ustar_alt'] # Calculate the predicted values for y
-        SSE_full=((temp_df['Fc']-yHat)**2).sum() # Calculate SSE
-        f_b_array[i]=(SSE_null_b-SSE_full)/(SSE_full/(50-2)) # Calculate and store F-score        
+    # Iterate through all possible change points 
+    for i in xrange(1, df_length - 1):
+               
+        # Operational (b) model statistics
+        temp_df['ustar_b'] = temp_df['ustar']
+        temp_df['ustar_b'].iloc[i + 1:] = temp_df['ustar_b'].iloc[i]
+        reg_params = np.linalg.lstsq(temp_df[['int','ustar_b']], temp_df['Fc'])[0]
+        yHat = reg_params[0] + reg_params[1] * temp_df['ustar_b']
+        SSE_full = ((temp_df['Fc'] - yHat)**2).sum()
+        f_b_array[i] = (SSE_null_b - SSE_full) / (SSE_full / (df_length - 2))
         
         # Diagnostic (a) model
-        temp_df['ustar_alt1']=temp_df['ustar']
-        temp_df['ustar_alt1'].iloc[i+1:]=temp_df['ustar_alt1'].iloc[i]
-        temp_df['ustar_alt2']=(temp_df['ustar']-temp_df['ustar'].iloc[i])*np.concatenate([np.zeros(i+1),np.ones(50-(i+1))])
-        reg_params=np.linalg.lstsq(temp_df[['int','ustar_alt1','ustar_alt2']],temp_df['Fc'])[0] # Do piecewise linear regression (multiple regression with dummy)          
-        yHat=reg_params[0]+reg_params[1]*temp_df['ustar_alt1']+reg_params[2]*temp_df['ustar_alt2'] # Calculate the predicted values for y
-        SSE_full=((temp_df['Fc']-yHat)**2).sum() # Calculate SSE
-        f_a_array[i]=(SSE_null_a-SSE_full)/(SSE_full/(50-2)) # Calculate and store F-score
+        temp_df['ustar_a1'] = temp_df['ustar']
+        temp_df['ustar_a1'].iloc[i + 1:] = temp_df['ustar_a1'].iloc[i]
+        dummy_array = np.concatenate([np.zeros(i + 1), 
+                                      np.ones(df_length - (i + 1))])
+        temp_df['ustar_a2'] = (temp_df['ustar'] - 
+                               temp_df['ustar'].iloc[i]) * dummy_array
+        reg_params = np.linalg.lstsq(temp_df[['int','ustar_a1','ustar_a2']],
+                                     temp_df['Fc'])[0]
+        yHat = (reg_params[0] + reg_params[1] * temp_df['ustar_a1'] +
+                reg_params[2] * temp_df['ustar_a2'])
+        SSE_full = ((temp_df['Fc'] - yHat)**2).sum()
+        f_a_array[i] = (SSE_null_a - SSE_full) / (SSE_full / (df_length - 2))
 
-    # Get max f-score, associated change point and ustar value
-      
-    # b model
-    f_b_array[0],f_b_array[-1]=f_b_array.min(),f_b_array.min()
-    f_b_max=f_b_array.max()
-    change_point_b=f_b_array.argmax()
-    ustar_threshold_b=temp_df['ustar'].iloc[change_point_b]
+    # Get max f-score, associated change point and ustar value for b model
+    f_b_max = f_b_array.max()
+    change_point_b = f_b_array.argmax()
+    ustar_threshold_b = temp_df['ustar'].iloc[change_point_b]
    
-    # a model                                                                
-    f_a_array[0],f_a_array[-1]=f_a_array.min(),f_a_array.min()
+    # Get max f-score, associated change point and ustar value for a model
     f_a_max=f_a_array.max()
-    change_point_a=f_a_array.argmax()
-    ustar_threshold_a=temp_df['ustar'].iloc[change_point_a]
+    change_point_a = f_a_array.argmax()
+    ustar_threshold_a = temp_df['ustar'].iloc[change_point_a]
     
     # Get regression parameters
     
@@ -90,12 +92,12 @@ def fit(temp_df):
     temp_df['ustar_alt1']=temp_df['ustar']
     temp_df['ustar_alt1'].iloc[change_point_a+1:]=temp_df['ustar_alt1'].iloc[change_point_a]
     temp_df['ustar_alt2']=(temp_df['ustar']-temp_df['ustar'].iloc[change_point_a])*np.concatenate([np.zeros(change_point_a+1),np.ones(50-(change_point_a+1))])
-    reg_params=pd.ols(x=temp_df[['ustar_alt1','ustar_alt2']],y=temp_df['Fc'])
-    a0=reg_params.beta.intercept
-    a1=reg_params.beta.ustar_alt1
-    a2=reg_params.beta.ustar_alt2
-    a1p=reg_params.p_value['ustar_alt1']
-    a2p=reg_params.p_value['ustar_alt2']
+    resols=sm.ols(formula="Fc ~ ustar_alt1 + ustar_alt2", data=temp_df).fit()
+    a0=resols.params[0]
+    a1=resols.params[1]
+    a2=resols.params[2]
+    a1p=resols.pvalues["ustar_alt1"]
+    a2p=resols.pvalues["ustar_alt2"]
     norm_a1=a1*(ustar_threshold_a/(a0+a1*ustar_threshold_a))
     norm_a2=a2*(ustar_threshold_a/(a0+a1*ustar_threshold_a))
     

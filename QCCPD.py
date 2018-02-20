@@ -15,6 +15,7 @@ from scipy import stats
 import os
 import sys
 from scipy.interpolate import interp1d
+from scipy.interpolate import PchipInterpolator
 import pdb
 import statsmodels.formula.api as sm
 
@@ -26,6 +27,11 @@ def bootstrap(df):
 
 #------------------------------------------------------------------------------
 def critical_f(f_max, n, model = 'a'):
+    
+    p = np.NaN
+    assert ~np.isnan(f_max)
+    assert ~np.isnan(n)
+    assert n > 10
     
     if model == 'b':
         
@@ -79,23 +85,31 @@ def critical_f(f_max, n, model = 'a'):
         raise KeyError('\'model\' keyword must be either \'a\' or \'b\'')
 
     crit_table = pd.DataFrame(arr, index = idx, columns = cols)
-    
-    f_vals = map(lambda x: float(interp1d(crit_table.index, crit_table[x])(n)), 
-                 crit_table.columns)
-    if f_max < f_vals[0]:
-        f_adj = stats.f.ppf(0.95, 3, n) * f_max / f_vals[0]
-        return 2 * (1 - stats.f.cdf(f_adj, 3, n))
-    elif f_max > f_vals[-1]:
-        f_adj = stats.f.ppf(0.995, 3, 55) * f_max / f_vals[-1]
-        return 2 * (1 - stats.f.cdf(f_adj, 3, n))
+    p_bounds = map(lambda x: 1 - (1 - x) / 2, [cols[0], cols[-1]])
+    f_crit_vals = map(lambda x: float(PchipInterpolator(crit_table.index, 
+                                                        crit_table[x])(n)), 
+                      crit_table.columns)
+    if f_max < f_crit_vals[0]:
+        f_adj = stats.f.ppf(p_bounds[0], len(cols), n) * f_max / f_crit_vals[0]
+        p = 2 * (1 - stats.f.cdf(f_adj, len(cols), n))
+        if p > 1: p = 1 
+    elif f_max > f_crit_vals[-1]:
+        f_adj = stats.f.ppf(p_bounds[-1], len(cols), n) * f_max / f_crit_vals[-1]
+        p = 2 * (1 - stats.f.cdf(f_adj, len(cols), n))
+        if p < 0: p = 0
     else:
-        pdb.set_trace()
-        return interp1d(f_vals, 1 - np.array(cols), f_max)
+        p = PchipInterpolator(f_crit_vals, (1 - np.array(cols)).tolist())(f_max)
+    print p
+    return
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
 def fit(df):
+    
+    def b_model_statistics():
         
+        pass
+    
     # Get stuff ready
     temp_df = df.copy()
     temp_df = temp_df.reset_index(drop = True)
@@ -125,7 +139,7 @@ def fit(df):
         SSE_full = ((temp_df['Fc'] - yHat)**2).sum()
         f_b_array[i] = (SSE_null_b - SSE_full) / (SSE_full / (df_length - 2))
         
-        # Diagnostic (a) model
+        # Diagnostic (a) model statistics
         temp_df['ustar_a1'] = temp_df['ustar']
         temp_df['ustar_a1'].iloc[i + 1:] = temp_df['ustar_a1'].iloc[i]
         dummy_array = np.concatenate([np.zeros(i + 1), 
@@ -145,7 +159,7 @@ def fit(df):
     ustar_threshold_b = temp_df['ustar'].iloc[change_point_b]
    
     # Get max f-score, associated change point and ustar value for a model
-    f_a_max=f_a_array.max()
+    f_a_max = f_a_array.max()
     change_point_a = f_a_array.argmax()
     ustar_threshold_a = temp_df['ustar'].iloc[change_point_a]
     

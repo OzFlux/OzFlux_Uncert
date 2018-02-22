@@ -157,32 +157,38 @@ def fit(df):
         # Diagnostic (a) and operational (b) model statistics
         f_a_array[i] = a_model_statistics(i)[0]
         f_b_array[i] = b_model_statistics(i)[0]
-        
+
+    # Make a dict to hold the results
+    var_names = ['ustar_th_b', 'cp_b', 'fmax_b', 'b0', 'b1', 'p_b', 
+                 'ustar_th_a', 'fmax_a', 'a0', 'a1', 'a2', 'cp_a', 'p_a', 
+                 'norm_a1', 'norm_a2']
+    d = {name: np.NaN for name in var_names}
+ 
     # Get max f-score, associated change point and ustar value for models
     # (conditional on passing f score and end points within limits)
     fmax_a, cp_a = f_a_array.max(), f_a_array.argmax()
-    if ((cp_a < endpts_threshold) | (cp_a > df_length - endpts_threshold)):
+    if ((cp_a > endpts_threshold) | (cp_a < df_length - endpts_threshold)):
         p_a = critical_f(fmax_a, df_length, model = 'a')
+        d['p_a'] = p_a
         if not p_a > psig:
             ustar_th_a = temp_df['ustar'].iloc[cp_a]
             a0, a1, a2 = a_model_statistics(cp_a)[1]
-            norm_a1 = a1 * (ustar_th_a / (a0 + a1 * ustar_th_a))
-            norm_a2 = a2 * (ustar_th_a / (a0 + a1 * ustar_th_a))
+            d['norm_a1'] = a1 * (ustar_th_a / (a0 + a1 * ustar_th_a))
+            d['norm_a2'] = a2 * (ustar_th_a / (a0 + a1 * ustar_th_a))
+            d['a0'], d['a1'], d['a2'], d['cp_a'] = a0, a1, a2, cp_a
+            d['ustar_th_a'], d['fmax_a'], d['p_a'] = ustar_th_a, fmax_a, p_a
             
     fmax_b, cp_b = f_b_array.max(), f_b_array.argmax()
-    if ((cp_b < endpts_threshold) | (cp_b > df_length - endpts_threshold)):
+    if ((cp_b > endpts_threshold) | (cp_b < df_length - endpts_threshold)):
         p_b = critical_f(fmax_b, len(temp_df), model = 'b')
         if not p_b > psig:    
             ustar_th_b = temp_df['ustar'].iloc[cp_b]
             b0, b1 = b_model_statistics(cp_b)[1]
-    
-    # Do this for now
-    a1p = p_a
-    a2p = p_b
+            d['b0'], d['b1'], d['cp_b'] = b0, b1, cp_b
+            d['ustar_th_b'], d['fmax_b'], d['p_b'] = ustar_th_b, fmax_b, p_b
     
     # Return results
-    return [ustar_th_b, fmax_b, b0, b1, cp_b, ustar_th_a, fmax_a, a0, a1, a2, 
-            norm_a1, norm_a2, cp_a, a1p, a2p]
+    return d
 
 #------------------------------------------------------------------------------
 
@@ -300,13 +306,9 @@ def main():
         
         # Use the results df index as an iterator to run the CPD algorithm on the year/season/temperature strata
         print 'Finding change points...'
-        cols = ['bMod_threshold','bMod_f_max','b0','b1','bMod_CP',
-                'aMod_threshold','aMod_f_max','a0','a1','a2','norm_a1','norm_a2','aMod_CP','a1p','a2p']
-        lst = []
-        for j in results_df.index:
-            temp_df = seasons_df.loc[j].copy()
-            lst.append(fit(temp_df))
-        stats_df = pd.DataFrame(np.vstack(lst), columns = cols, index = results_df.index)
+        stats_df = pd.DataFrame(map(lambda x: fit(seasons_df.loc[x]), 
+                                    results_df.index),
+                                index = results_df.index)
         results_df = results_df.join(stats_df)
         print 'Done!'
         

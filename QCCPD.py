@@ -14,7 +14,7 @@ import pandas as pd
 from scipy import stats
 import os
 import sys
-from scipy.interpolate import interp1d
+#from scipy.interpolate import interp1d
 from scipy.interpolate import PchipInterpolator
 import pdb
 import statsmodels.formula.api as sm
@@ -26,7 +26,7 @@ def bootstrap(df):
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
-def critical_f(f_max, n, model = 'a'):
+def critical_f(f_max, n, model):
     
     p = np.NaN
     assert ~np.isnan(f_max)
@@ -81,9 +81,6 @@ def critical_f(f_max, n, model = 'a'):
                               np.array([800, 1000, 2500])])
         cols = [0.9, 0.95, 0.99]
 
-    else: 
-        raise KeyError('\'model\' keyword must be either \'a\' or \'b\'')
-
     crit_table = pd.DataFrame(arr, index = idx, columns = cols)
     p_bounds = map(lambda x: 1 - (1 - x) / 2, [cols[0], cols[-1]])
     f_crit_vals = map(lambda x: float(PchipInterpolator(crit_table.index, 
@@ -99,27 +96,53 @@ def critical_f(f_max, n, model = 'a'):
         if p < 0: p = 0
     else:
         p = PchipInterpolator(f_crit_vals, (1 - np.array(cols)).tolist())(f_max)
-    print p
-    return
+    return p
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
 def fit(df):
     
-    def b_model_statistics():
-        
-        pass
+    def a_model_statistics(cp):
+        work_df = temp_df.copy()
+        work_df['ustar_a1'] = work_df['ustar']
+        work_df['ustar_a1'].iloc[cp + 1:] = work_df['ustar_a1'].iloc[cp]
+        dummy_array = np.concatenate([np.zeros(cp + 1), 
+                                      np.ones(df_length - (cp + 1))])
+        work_df['ustar_a2'] = (work_df['ustar'] - 
+                               work_df['ustar'].iloc[cp]) * dummy_array
+        reg_params = np.linalg.lstsq(work_df[['int','ustar_a1','ustar_a2']],
+                                     work_df['Fc'])[0]
+        yHat = (reg_params[0] + reg_params[1] * work_df['ustar_a1'] +
+                reg_params[2] * work_df['ustar_a2'])
+        SSE_full = ((work_df['Fc'] - yHat)**2).sum()
+        f_score = (SSE_null_a - SSE_full) / (SSE_full / (df_length - 2))
+        return f_score, reg_params
     
+    def b_model_statistics(cp):
+        work_df = temp_df.copy()
+        work_df['ustar_b'] = work_df['ustar']
+        work_df['ustar_b'].iloc[cp + 1:] = work_df['ustar_b'].iloc[cp]
+        reg_params = np.linalg.lstsq(work_df[['int','ustar_b']], 
+                                     work_df['Fc'])[0]
+        yHat = reg_params[0] + reg_params[1] * work_df['ustar_b']
+        SSE_full = ((work_df['Fc'] - yHat)**2).sum()
+        f_score = (SSE_null_b - SSE_full) / (SSE_full / (df_length - 2))
+        return f_score, reg_params
+        
     # Get stuff ready
     temp_df = df.copy()
     temp_df = temp_df.reset_index(drop = True)
     temp_df = temp_df.astype(np.float64)        
     df_length = len(temp_df)
+    endpts_threshold = np.floor(df_length * 0.05)
+    if endpts_threshold < 3: endpts_threshold = 3
+    psig = 0.05
     
     # Calculate null model SSE for operational (b) and diagnostic (a) model
     SSE_null_b = ((temp_df['Fc'] - temp_df['Fc'].mean())**2).sum()
     alpha0 , alpha1 = stats.linregress(temp_df['ustar'], temp_df['Fc'])[:2]
-    SSE_null_a = ((temp_df['Fc'] - (temp_df['ustar'] * alpha0 + alpha1))**2).sum()
+    SSE_null_a = ((temp_df['Fc'] - (temp_df['ustar'] * 
+                                    alpha0 + alpha1))**2).sum()
     
     # Create arrays to hold statistics
     f_a_array = np.zeros(df_length)
@@ -130,64 +153,36 @@ def fit(df):
         
     # Iterate through all possible change points 
     for i in xrange(1, df_length - 1):
-               
-        # Operational (b) model statistics
-        temp_df['ustar_b'] = temp_df['ustar']
-        temp_df['ustar_b'].iloc[i + 1:] = temp_df['ustar_b'].iloc[i]
-        reg_params = np.linalg.lstsq(temp_df[['int','ustar_b']], temp_df['Fc'])[0]
-        yHat = reg_params[0] + reg_params[1] * temp_df['ustar_b']
-        SSE_full = ((temp_df['Fc'] - yHat)**2).sum()
-        f_b_array[i] = (SSE_null_b - SSE_full) / (SSE_full / (df_length - 2))
+              
+        # Diagnostic (a) and operational (b) model statistics
+        f_a_array[i] = a_model_statistics(i)[0]
+        f_b_array[i] = b_model_statistics(i)[0]
         
-        # Diagnostic (a) model statistics
-        temp_df['ustar_a1'] = temp_df['ustar']
-        temp_df['ustar_a1'].iloc[i + 1:] = temp_df['ustar_a1'].iloc[i]
-        dummy_array = np.concatenate([np.zeros(i + 1), 
-                                      np.ones(df_length - (i + 1))])
-        temp_df['ustar_a2'] = (temp_df['ustar'] - 
-                               temp_df['ustar'].iloc[i]) * dummy_array
-        reg_params = np.linalg.lstsq(temp_df[['int','ustar_a1','ustar_a2']],
-                                     temp_df['Fc'])[0]
-        yHat = (reg_params[0] + reg_params[1] * temp_df['ustar_a1'] +
-                reg_params[2] * temp_df['ustar_a2'])
-        SSE_full = ((temp_df['Fc'] - yHat)**2).sum()
-        f_a_array[i] = (SSE_null_a - SSE_full) / (SSE_full / (df_length - 2))
-
-    # Get max f-score, associated change point and ustar value for b model
-    f_b_max = f_b_array.max()
-    change_point_b = f_b_array.argmax()
-    ustar_threshold_b = temp_df['ustar'].iloc[change_point_b]
-   
-    # Get max f-score, associated change point and ustar value for a model
-    f_a_max = f_a_array.max()
-    change_point_a = f_a_array.argmax()
-    ustar_threshold_a = temp_df['ustar'].iloc[change_point_a]
+    # Get max f-score, associated change point and ustar value for models
+    # (conditional on passing f score and end points within limits)
+    fmax_a, cp_a = f_a_array.max(), f_a_array.argmax()
+    if ((cp_a < endpts_threshold) | (cp_a > df_length - endpts_threshold)):
+        p_a = critical_f(fmax_a, df_length, model = 'a')
+        if not p_a > psig:
+            ustar_th_a = temp_df['ustar'].iloc[cp_a]
+            a0, a1, a2 = a_model_statistics(cp_a)[1]
+            norm_a1 = a1 * (ustar_th_a / (a0 + a1 * ustar_th_a))
+            norm_a2 = a2 * (ustar_th_a / (a0 + a1 * ustar_th_a))
+            
+    fmax_b, cp_b = f_b_array.max(), f_b_array.argmax()
+    if ((cp_b < endpts_threshold) | (cp_b > df_length - endpts_threshold)):
+        p_b = critical_f(fmax_b, len(temp_df), model = 'b')
+        if not p_b > psig:    
+            ustar_th_b = temp_df['ustar'].iloc[cp_b]
+            b0, b1 = b_model_statistics(cp_b)[1]
     
-    # Get regression parameters
-    
-    # b model
-    temp_df['ustar_alt']=temp_df['ustar']
-    temp_df['ustar_alt'].iloc[change_point_b+1:]=ustar_threshold_b
-    reg_params=np.linalg.lstsq(temp_df[['int','ustar_alt']],temp_df['Fc'])[0]
-    b0=reg_params[0]
-    b1=reg_params[1]    
-    
-    # a model
-    temp_df['ustar_alt1']=temp_df['ustar']
-    temp_df['ustar_alt1'].iloc[change_point_a+1:]=temp_df['ustar_alt1'].iloc[change_point_a]
-    temp_df['ustar_alt2']=(temp_df['ustar']-temp_df['ustar'].iloc[change_point_a])*np.concatenate([np.zeros(change_point_a+1),np.ones(50-(change_point_a+1))])
-    resols=sm.ols(formula="Fc ~ ustar_alt1 + ustar_alt2", data=temp_df).fit()
-    a0=resols.params[0]
-    a1=resols.params[1]
-    a2=resols.params[2]
-    a1p=resols.pvalues["ustar_alt1"]
-    a2p=resols.pvalues["ustar_alt2"]
-    norm_a1=a1*(ustar_threshold_a/(a0+a1*ustar_threshold_a))
-    norm_a2=a2*(ustar_threshold_a/(a0+a1*ustar_threshold_a))
+    # Do this for now
+    a1p = p_a
+    a2p = p_b
     
     # Return results
-    return [ustar_threshold_b,f_b_max,b0,b1,change_point_b,
-            ustar_threshold_a,f_a_max,a0,a1,a2,norm_a1,norm_a2,change_point_a,a1p,a2p]
+    return [ustar_th_b, fmax_b, b0, b1, cp_b, ustar_th_a, fmax_a, a0, a1, a2, 
+            norm_a1, norm_a2, cp_a, a1p, a2p]
 
 #------------------------------------------------------------------------------
 

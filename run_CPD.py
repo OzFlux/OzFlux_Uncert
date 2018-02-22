@@ -81,3 +81,6 @@ col_names = ['bMod_threshold','bMod_f_max','b0','b1', 'bMod_CP',
 stats_df = pd.DataFrame(dict(zip(col_names, stats)), index = [0])
 
 test = plot_fits(df, stats_df)
+
+print 'Significance level of a model is: {}'.format(str(round(stats_df.a1p, 5)))
+print 'Significance level of b model is: {}'.format(str(round(stats_df.a2p, 5)))

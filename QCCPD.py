@@ -547,6 +547,7 @@ def sort(df, flux_period, years_index):
     bin_n = 5 if flux_period == 30 else 3
     
     # Create a df containing count stats for the variables for all available years
+    df = df.loc[df['Fsd'] < 10, ['Fc', 'ustar', 'Ta']].copy()
     years_df = df[['Fc', 'ustar']].dropna().groupby([lambda x: x.year]).count()
     years_df.drop('ustar', axis = 1, inplace = True)
     years_df.columns = ['n_valid']
@@ -568,6 +569,9 @@ def sort(df, flux_period, years_index):
     # 3) sort temperature class by ustar; 4) add bin number to temperature 
     #    class, then concatenate
     lst = []
+    T_array = np.concatenate(map(lambda x: np.tile(x, season_n / 4), range(4)))
+    bin_array = np.tile(np.concatenate(map(lambda x: np.tile(x, bin_n), 
+                                           range(50))), 4)
     for year in years_df.index:
         for season in xrange(years_df.loc[year, 'n_seasons']):
             start_ind = season * (season_n / 2)
@@ -576,30 +580,27 @@ def sort(df, flux_period, years_index):
             this_df.sort_values('Ta', axis = 0, inplace = True)
             this_df['Year'] = this_df.index.year
             this_df['Season'] = season + 1
-            this_df['T_class'] = np.concatenate(map(lambda x: np.tile(x, season_n / 4), 
-                                                    range(4)))
+            this_df['T_class'] = T_array
             this_df = pd.concat(map(lambda x: 
                                     this_df.loc[this_df.T_class == x]
                                     .sort_values('ustar', axis = 0), 
                                     range(4)))
-            this_df['Bin'] = np.tile
-            pdb.set_trace()                
+            this_df['Bin'] = bin_array    
+            lst.append(this_df)
     seasons_df = pd.concat([frame for frame in lst])
 
-    pdb.set_trace()
-
-    # Make a hierarchical index for year, season, temperature class, bin for the seasons dataframe
-    years_index=np.concatenate([np.int32(np.tile(year, years_df.loc[year, 'n_seasons'] * season_n)) 
-                                for year in years_df.index])
-    
-    seasons_index=np.concatenate([np.concatenate([np.int32(np.ones(season_n)*(season+1)) 
-                                                  for season in xrange(years_df.loc[year, 'n_seasons'])]) 
-                                                  for year in years_df.index])
-
-    Tclass_index=np.tile(np.concatenate([np.int32(np.ones(season_n/4)*(i+1)) for i in xrange(4)]),
-                         len(seasons_index)/season_n)
-    
-    bin_index=np.tile(np.int32(np.arange(season_n/4)/(season_n/200)),len(seasons_df)/(season_n/4))
+#    # Make a hierarchical index for year, season, temperature class, bin for the seasons dataframe
+#    years_index=np.concatenate([np.int32(np.tile(year, years_df.loc[year, 'n_seasons'] * season_n)) 
+#                                for year in years_df.index])
+#    
+#    seasons_index=np.concatenate([np.concatenate([np.int32(np.ones(season_n)*(season+1)) 
+#                                                  for season in xrange(years_df.loc[year, 'n_seasons'])]) 
+#                                                  for year in years_df.index])
+#
+#    Tclass_index=np.tile(np.concatenate([np.int32(np.ones(season_n/4)*(i+1)) for i in xrange(4)]),
+#                         len(seasons_index)/season_n)
+#    
+#    bin_index=np.tile(np.int32(np.arange(season_n/4)/(season_n/200)),len(seasons_df)/(season_n/4))
 
     # Zip together hierarchical index and add to df
     arrays = [years_index, seasons_index, Tclass_index]

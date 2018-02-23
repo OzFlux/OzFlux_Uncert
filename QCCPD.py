@@ -589,18 +589,18 @@ def sort(df, flux_period, years_index):
             lst.append(this_df)
     seasons_df = pd.concat([frame for frame in lst])
 
-#    # Make a hierarchical index for year, season, temperature class, bin for the seasons dataframe
-#    years_index=np.concatenate([np.int32(np.tile(year, years_df.loc[year, 'n_seasons'] * season_n)) 
-#                                for year in years_df.index])
-#    
-#    seasons_index=np.concatenate([np.concatenate([np.int32(np.ones(season_n)*(season+1)) 
-#                                                  for season in xrange(years_df.loc[year, 'n_seasons'])]) 
-#                                                  for year in years_df.index])
-#
-#    Tclass_index=np.tile(np.concatenate([np.int32(np.ones(season_n/4)*(i+1)) for i in xrange(4)]),
-#                         len(seasons_index)/season_n)
-#    
-#    bin_index=np.tile(np.int32(np.arange(season_n/4)/(season_n/200)),len(seasons_df)/(season_n/4))
+    # Make a hierarchical index for year, season, temperature class, bin for the seasons dataframe
+    years_index=np.concatenate([np.int32(np.tile(year, years_df.loc[year, 'n_seasons'] * season_n)) 
+                                for year in years_df.index])
+    
+    seasons_index=np.concatenate([np.concatenate([np.int32(np.ones(season_n)*(season+1)) 
+                                                  for season in xrange(years_df.loc[year, 'n_seasons'])]) 
+                                                  for year in years_df.index])
+
+    Tclass_index=np.tile(np.concatenate([np.int32(np.ones(season_n/4)*(i+1)) for i in xrange(4)]),
+                         len(seasons_index)/season_n)
+    
+    bin_index=np.tile(np.int32(np.arange(season_n/4)/(season_n/200)),len(seasons_df)/(season_n/4))
 
     # Zip together hierarchical index and add to df
     arrays = [years_index, seasons_index, Tclass_index]
@@ -608,6 +608,7 @@ def sort(df, flux_period, years_index):
     hierarchical_index = pd.MultiIndex.from_tuples(tuples, names = ['year','season','T_class'])
     seasons_df.index = hierarchical_index
 
+    pdb.set_trace()
     
     # Set up the results df
     results_df = pd.DataFrame({'T_avg':seasons_df['Ta'].groupby(level = ['year','season','T_class']).mean()})

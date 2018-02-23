@@ -161,7 +161,7 @@ def fit(df):
     # Make a dict to hold the results
     var_names = ['ustar_th_b', 'cp_b', 'fmax_b', 'b0', 'b1', 'p_b', 
                  'ustar_th_a', 'fmax_a', 'a0', 'a1', 'a2', 'cp_a', 'p_a', 
-                 'norm_a1', 'norm_a2']
+                 'norm_a1', 'norm_a2', 'n']
     d = {name: np.NaN for name in var_names}
  
     # Get max f-score, associated change point and ustar value for models
@@ -187,69 +187,71 @@ def fit(df):
             d['b0'], d['b1'], d['cp_b'] = b0, b1, cp_b
             d['ustar_th_b'], d['fmax_b'], d['p_b'] = ustar_th_b, fmax_b, p_b
     
+    d['n'] = df_length
+    
     # Return results
     return d
 
 #------------------------------------------------------------------------------
 
-#------------------------------------------------------------------------------
-# Fetch the data and prepare it for analysis
-def get_data():
-        
-    # Prompt user for configuration file and get it
-    root = Tkinter.Tk(); root.withdraw()
-    cfName = tkFileDialog.askopenfilename(initialdir = '')
-    root.destroy()
-    cf=ConfigObj(cfName)
-    
-    # Set input file and output path and create directories for plots and results
-    file_in = os.path.join(cf['files']['input_path'], cf['files']['input_file'])
-    path_out = cf['files']['output_path']
-    plot_path_out = os.path.join(path_out,'Plots')
-    if not os.path.isdir(plot_path_out): os.makedirs(os.path.join(path_out, 'Plots'))
-    results_path_out=os.path.join(path_out, 'Results')
-    if not os.path.isdir(results_path_out): os.makedirs(os.path.join(path_out, 'Results'))    
-    
-    # Get user-set variable names from config file
-    vars_data = [cf['variables']['data'][i] for i in cf['variables']['data']]
-    vars_QC = [cf['variables']['QC'][i] for i in cf['variables']['QC']]
-    vars_all = vars_data + vars_QC
-       
-    # Read .nc file
-    nc_obj = netCDF4.Dataset(file_in)
-    flux_period = int(nc_obj.time_step)
-    dates_list = [dt.datetime(*xlrd.xldate_as_tuple(elem, 0)) for elem in nc_obj.variables['xlDateTime']]
-    d = {}
-    for i in vars_all:
-        ndims = len(nc_obj.variables[i].shape)
-        if ndims == 3:
-            d[i] = nc_obj.variables[i][:,0,0]
-        elif ndims == 1:    
-            d[i] = nc_obj.variables[i][:]
-    nc_obj.close()
-    df = pd.DataFrame(d, index = dates_list)    
-        
-    # Build dictionary of additional configs
-    d = {}
-    d['radiation_threshold'] = int(cf['options']['radiation_threshold'])
-    d['num_bootstraps'] = int(cf['options']['num_bootstraps'])
-    d['flux_period'] = flux_period
-    if cf['options']['output_plots'] == 'True':
-        d['plot_output_path'] = plot_path_out
-    if cf['options']['output_results'] == 'True':
-        d['results_output_path'] = results_path_out
-        
-    # Replace configured error values with NaNs and remove data with unacceptable QC codes, then drop flags
-    df.replace(int(cf['options']['nan_value']), np.nan)
-    if 'QC_accept_codes' in cf['options']:    
-        QC_accept_codes = ast.literal_eval(cf['options']['QC_accept_codes'])
-        eval_string = '|'.join(['(df[vars_QC[i]]=='+str(i)+')' for i in QC_accept_codes])
-        for i in xrange(4):
-            df[vars_data[i]] = np.where(eval(eval_string), df[vars_data[i]], np.nan)
-    df = df[vars_data]
-    
-    return df,d
-#------------------------------------------------------------------------------
+##------------------------------------------------------------------------------
+## Fetch the data and prepare it for analysis
+#def get_data():
+#        
+#    # Prompt user for configuration file and get it
+#    root = Tkinter.Tk(); root.withdraw()
+#    cfName = tkFileDialog.askopenfilename(initialdir = '')
+#    root.destroy()
+#    cf=ConfigObj(cfName)
+#    
+#    # Set input file and output path and create directories for plots and results
+#    file_in = os.path.join(cf['files']['input_path'], cf['files']['input_file'])
+#    path_out = cf['files']['output_path']
+#    plot_path_out = os.path.join(path_out,'Plots')
+#    if not os.path.isdir(plot_path_out): os.makedirs(os.path.join(path_out, 'Plots'))
+#    results_path_out=os.path.join(path_out, 'Results')
+#    if not os.path.isdir(results_path_out): os.makedirs(os.path.join(path_out, 'Results'))    
+#    
+#    # Get user-set variable names from config file
+#    vars_data = [cf['variables']['data'][i] for i in cf['variables']['data']]
+#    vars_QC = [cf['variables']['QC'][i] for i in cf['variables']['QC']]
+#    vars_all = vars_data + vars_QC
+#       
+#    # Read .nc file
+#    nc_obj = netCDF4.Dataset(file_in)
+#    flux_period = int(nc_obj.time_step)
+#    dates_list = [dt.datetime(*xlrd.xldate_as_tuple(elem, 0)) for elem in nc_obj.variables['xlDateTime']]
+#    d = {}
+#    for i in vars_all:
+#        ndims = len(nc_obj.variables[i].shape)
+#        if ndims == 3:
+#            d[i] = nc_obj.variables[i][:,0,0]
+#        elif ndims == 1:    
+#            d[i] = nc_obj.variables[i][:]
+#    nc_obj.close()
+#    df = pd.DataFrame(d, index = dates_list)    
+#        
+#    # Build dictionary of additional configs
+#    d = {}
+#    d['radiation_threshold'] = int(cf['options']['radiation_threshold'])
+#    d['num_bootstraps'] = int(cf['options']['num_bootstraps'])
+#    d['flux_period'] = flux_period
+#    if cf['options']['output_plots'] == 'True':
+#        d['plot_output_path'] = plot_path_out
+#    if cf['options']['output_results'] == 'True':
+#        d['results_output_path'] = results_path_out
+#        
+#    # Replace configured error values with NaNs and remove data with unacceptable QC codes, then drop flags
+#    df.replace(int(cf['options']['nan_value']), np.nan)
+#    if 'QC_accept_codes' in cf['options']:    
+#        QC_accept_codes = ast.literal_eval(cf['options']['QC_accept_codes'])
+#        eval_string = '|'.join(['(df[vars_QC[i]]=='+str(i)+')' for i in QC_accept_codes])
+#        for i in xrange(4):
+#            df[vars_data[i]] = np.where(eval(eval_string), df[vars_data[i]], np.nan)
+#    df = df[vars_data]
+#    
+#    return df,d
+##------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
 # Coordinate steps in CPD process
@@ -541,59 +543,77 @@ def QC2(df,output_df,bootstrap_n):
 def sort(df, flux_period, years_index):
     
     # Set the bin size on the basis of the flux measurement frequency
-    if flux_period == 30:
-        bin_size = 1000
-    else:
-        bin_size = 600
+    season_n = 1000 if flux_period == 30 else 600
     
     # Create a df containing count stats for the variables for all available years
-    years_df = pd.DataFrame(index=years_index)
-    years_df['Fc_count'] = df['Fc'].groupby([lambda x: x.year]).count()
-    years_df['seasons'] = [years_df.loc[j, 'Fc_count']/(bin_size/2)-1 for j in years_df.index]
-    years_df['seasons'].fillna(0, inplace=True)
-    years_df['seasons'] = np.where(years_df['seasons'] < 0, 0, years_df['seasons'])
-    years_df['seasons'] = years_df['seasons'].astype(int)
-    if np.all(years_df['seasons'] <= 0):
-        sys.exit('No years with sufficient data for evaluation. Exiting...')
-    elif np.any(years_df['seasons'] <= 0):
-        exclude_years_list = years_df[years_df['seasons'] <= 0].index.tolist()
+    years_df = df[['Fc', 'ustar']].dropna().groupby([lambda x: x.year]).count()
+    years_df.drop('ustar', axis = 1, inplace = True)
+    years_df.columns = ['n_valid']
+    years_df['n_seasons'] = map(lambda x: years_df.loc[x, 'n_valid'] / 
+                                (season_n / 2) - 1, years_df.index)
+    years_df['n_seasons'].fillna(0, inplace=True)
+    if np.all(years_df['n_seasons'] == 0):
+        print('No years with sufficient data for evaluation. Returning...')
+        return
+    if np.any(years_df['n_seasons'] == 0):
+        exclude_years_list = years_df[years_df['n_seasons'] <= 0].index.tolist()
         exclude_years_str= ','.join(map(str, exclude_years_list))
-        print 'Insufficient data for evaluation in the following years: ' + exclude_years_str + ' (excluded from analysis)'
-        years_df = years_df[years_df['seasons'] > 0]
-    
-    # Extract overlapping series, sort by temperature and concatenate
+        print ('Insufficient data for evaluation in the following years: {}'
+               ' (excluded from analysis)'.format(exclude_years_str))
+        years_df = years_df.loc[years_df['seasons'] > 0]
+
+    # Extract overlapping series, for each of which:
+    # 1) sort by temperature; 2) create temperature class; 
+    # 3) sort temperature class by ustar; 4) add bin number
+    # temperature classes, and concatenate
     lst = []
     for year in years_df.index:
-        for season in xrange(years_df.loc[year, 'seasons']):
-            start_ind = season * (bin_size / 2)
-            end_ind = season * (bin_size / 2) + bin_size
-            lst.append(df.ix[str(year)].iloc[start_ind:end_ind].sort('Ta', axis = 0))
+        for season in xrange(years_df.loc[year, 'n_seasons']):
+            start_ind = season * (season_n / 2)
+            end_ind = season * (season_n / 2) + season_n
+            this_df = df.loc[str(year)].iloc[start_ind: end_ind]
+            this_df.sort_values('Ta', axis = 0, inplace = True)
+            this_df['Year'] = this_df.index.year
+            this_df['Season'] = season + 1
+            this_df['T_class'] = np.concatenate(map(lambda x: np.tile(x, season_n / 4), 
+                                                    range(4)))
+            lst.append(this_df)
+#            lst.append(pd.concat(map(lambda x: 
+#                                     this_df.loc[this_df.T_class == x]
+#                                     .sort_values('ustar', axis = 0), 
+#                                     range(3))))
     seasons_df = pd.concat([frame for frame in lst])
 
+    pdb.set_trace()
+
     # Make a hierarchical index for year, season, temperature class, bin for the seasons dataframe
-    years_index=np.concatenate([np.int32(np.ones(years_df.loc[year, 'seasons'] * bin_size) * year) 
+    years_index=np.concatenate([np.int32(np.tile(year, years_df.loc[year, 'n_seasons'] * season_n)) 
                                 for year in years_df.index])
     
-    seasons_index=np.concatenate([np.concatenate([np.int32(np.ones(bin_size)*(season+1)) 
-                                                  for season in xrange(years_df.loc[year, 'seasons'])]) 
+    seasons_index=np.concatenate([np.concatenate([np.int32(np.ones(season_n)*(season+1)) 
+                                                  for season in xrange(years_df.loc[year, 'n_seasons'])]) 
                                                   for year in years_df.index])
 
-    Tclass_index=np.tile(np.concatenate([np.int32(np.ones(bin_size/4)*(i+1)) for i in xrange(4)]),
-                         len(seasons_index)/bin_size)
+    Tclass_index=np.tile(np.concatenate([np.int32(np.ones(season_n/4)*(i+1)) for i in xrange(4)]),
+                         len(seasons_index)/season_n)
     
-    bin_index=np.tile(np.int32(np.arange(bin_size/4)/(bin_size/200)),len(seasons_df)/(bin_size/4))
+    bin_index=np.tile(np.int32(np.arange(season_n/4)/(season_n/200)),len(seasons_df)/(season_n/4))
 
     # Zip together hierarchical index and add to df
     arrays = [years_index, seasons_index, Tclass_index]
     tuples = list(zip(*arrays))
     hierarchical_index = pd.MultiIndex.from_tuples(tuples, names = ['year','season','T_class'])
     seasons_df.index = hierarchical_index
+
     
     # Set up the results df
     results_df = pd.DataFrame({'T_avg':seasons_df['Ta'].groupby(level = ['year','season','T_class']).mean()})
+
+
     
     # Sort the seasons by ustar, then bin average and drop the bin level from the index
-    seasons_df = pd.concat([seasons_df.loc[i[0]].loc[i[1]].loc[i[2]].sort('ustar', axis=0) for i in results_df.index])
+    seasons_df = pd.concat([seasons_df.loc[i[0]].loc[i[1]].loc[i[2]].sort_values('ustar', axis=0) for i in results_df.index])
+    pdb.set_trace()
     seasons_df.index = hierarchical_index
     seasons_df = seasons_df.set_index(bin_index, append = True)
     seasons_df.index.names = ['year','season','T_class','bin']

@@ -544,6 +544,7 @@ def sort(df, flux_period, years_index):
     
     # Set the bin size on the basis of the flux measurement frequency
     season_n = 1000 if flux_period == 30 else 600
+    bin_n = 5 if flux_period == 30 else 3
     
     # Create a df containing count stats for the variables for all available years
     years_df = df[['Fc', 'ustar']].dropna().groupby([lambda x: x.year]).count()
@@ -564,8 +565,8 @@ def sort(df, flux_period, years_index):
 
     # Extract overlapping series, for each of which:
     # 1) sort by temperature; 2) create temperature class; 
-    # 3) sort temperature class by ustar; 4) add bin number
-    # temperature classes, and concatenate
+    # 3) sort temperature class by ustar; 4) add bin number to temperature 
+    #    class, then concatenate
     lst = []
     for year in years_df.index:
         for season in xrange(years_df.loc[year, 'n_seasons']):
@@ -577,11 +578,12 @@ def sort(df, flux_period, years_index):
             this_df['Season'] = season + 1
             this_df['T_class'] = np.concatenate(map(lambda x: np.tile(x, season_n / 4), 
                                                     range(4)))
-            lst.append(this_df)
-#            lst.append(pd.concat(map(lambda x: 
-#                                     this_df.loc[this_df.T_class == x]
-#                                     .sort_values('ustar', axis = 0), 
-#                                     range(3))))
+            this_df = pd.concat(map(lambda x: 
+                                    this_df.loc[this_df.T_class == x]
+                                    .sort_values('ustar', axis = 0), 
+                                    range(4)))
+            this_df['Bin'] = np.tile
+            pdb.set_trace()                
     seasons_df = pd.concat([frame for frame in lst])
 
     pdb.set_trace()

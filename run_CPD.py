@@ -100,7 +100,6 @@ def plot_fits(temp_df, stats_df):
             verticalalignment = 'top', transform = ax.transAxes)
     ax.legend(loc = [0.1, 0.8], frameon = False, fontsize = 12)
 
-
 # Set parameters for generation of noisy data
 noise_dict = {'slope': 0.44, 
               'intercept': 0.4}

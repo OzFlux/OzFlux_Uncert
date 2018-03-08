@@ -1,14 +1,9 @@
 # -*- coding: utf-8 -*-
 
 # Python modules
-import Tkinter, tkFileDialog
-from configobj import ConfigObj
 import matplotlib.pyplot as plt
 import matplotlib.mlab as mlab
-import netCDF4
-import xlrd
 import datetime as dt
-import ast
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -22,7 +17,7 @@ import statsmodels.formula.api as sm
 #------------------------------------------------------------------------------
 # Return a bootstrapped sample of the passed dataframe
 def bootstrap(df):
-    return df.iloc[np.random.random_integers(0, len(df)-1, len(df))]
+    return df.iloc[sorted(np.random.randint(0, len(df) - 1, len(df)))].copy()
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
@@ -158,38 +153,25 @@ def fit(df):
         f_a_array[i] = a_model_statistics(i)[0]
         f_b_array[i] = b_model_statistics(i)[0]
 
-    # Make a dict to hold the results
-    var_names = ['ustar_th_b', 'cp_b', 'fmax_b', 'b0', 'b1', 'p_b', 
-                 'ustar_th_a', 'fmax_a', 'a0', 'a1', 'a2', 'cp_a', 'p_a', 
-                 'norm_a1', 'norm_a2', 'n']
-    d = {name: np.NaN for name in var_names}
- 
     # Get max f-score, associated change point and ustar value for models
     # (conditional on passing f score and end points within limits)
-    fmax_a, cp_a = f_a_array.max(), f_a_array.argmax()
+    d = {}
+    fmax_a, cp_a = f_a_array.max(), int(f_a_array.argmax())
     if ((cp_a > endpts_threshold) | (cp_a < df_length - endpts_threshold)):
         p_a = critical_f(fmax_a, df_length, model = 'a')
-        d['p_a'] = p_a
-        if not p_a > psig:
+        if p_a < psig:
             ustar_th_a = temp_df['ustar'].iloc[cp_a]
             a0, a1, a2 = a_model_statistics(cp_a)[1]
             d['norm_a1'] = a1 * (ustar_th_a / (a0 + a1 * ustar_th_a))
             d['norm_a2'] = a2 * (ustar_th_a / (a0 + a1 * ustar_th_a))
-            d['a0'], d['a1'], d['a2'], d['cp_a'] = a0, a1, a2, cp_a
-            d['ustar_th_a'], d['fmax_a'], d['p_a'] = ustar_th_a, fmax_a, p_a
-            
-    fmax_b, cp_b = f_b_array.max(), f_b_array.argmax()
+            d['ustar_th_a'], d['a0'], d['a1'], d['a2'] = ustar_th_a, a0, a1, a2           
+    fmax_b, cp_b = f_b_array.max(), int(f_b_array.argmax())
     if ((cp_b > endpts_threshold) | (cp_b < df_length - endpts_threshold)):
         p_b = critical_f(fmax_b, len(temp_df), model = 'b')
-        if not p_b > psig:    
-            ustar_th_b = temp_df['ustar'].iloc[cp_b]
-            b0, b1 = b_model_statistics(cp_b)[1]
-            d['b0'], d['b1'], d['cp_b'] = b0, b1, cp_b
-            d['ustar_th_b'], d['fmax_b'], d['p_b'] = ustar_th_b, fmax_b, p_b
-    
-    d['n'] = df_length
-    
-    # Return results
+        if p_b < psig:    
+            d['ustar_th_b'] = temp_df['ustar'].iloc[cp_b]
+            d['b0'], d['b1'] = b_model_statistics(cp_b)[1]
+
     return d
 
 #------------------------------------------------------------------------------
@@ -255,7 +237,7 @@ def fit(df):
 
 #------------------------------------------------------------------------------
 # Coordinate steps in CPD process
-def main():
+def main(df, n_bootstraps = 10):
     """
     This script fetches data from an OzFluxQC .nc file and applies change point detection
     algorithms to the nocturnal C flux data to provide a best estimate for the u*threshold, 
@@ -269,73 +251,45 @@ def main():
     friction–velocity threshold evaluation in eddy-covariance studies. 
     Agric. For. Meteorol. 171-172, 31–45. doi:10.1016/j.agrformet.2012.11.023
     
-    Still to do:
-        - calculation of f-statistic limits for passing QC
+
         
     * Season is just a 1000 point slice of nocturnal data - these slices also overlap by 50%.    
     """
-    
-    master_df,d = get_data()
-
-    # Find number of years in df    
-    years_index = list(set(master_df.index.year))
-    
-    # Create df to keep counts of total samples and QC passed samples
-    counts_df = pd.DataFrame(index=years_index,columns = ['Total'])
-    counts_df.fillna(0,inplace = True)
-    
+   
     print 'Starting analysis...'    
     
     # Bootstrap the data and run the CPD algorithm
-    for i in xrange(d['num_bootstraps']):
+    for i in xrange(n_bootstraps):
                         
-        # Bootstrap the data for each year
-        bootstrap_flag = (False if i == 0 else True)
-        if bootstrap_flag == False:
-            df = master_df            
+        # First pass is obs, otherwise use bootstraps
+        try:
+            assert i > 0
+            work_df = pd.concat(map(lambda x: bootstrap(df.loc[str(x)]),
+                                    list(set(df.index.year))))
+            print 'Analysing bootstrap {}'.format(str(i))
+        except:
+            work_df = df.copy()
             print 'Analysing observational data for first pass'
-        else:
-            df = pd.concat([bootstrap(master_df.loc[str(j)]) for j in years_index])
-            print 'Analysing bootstrap '+str(i)
         
-        # Create nocturnal dataframe (drop all records where any one of the variables is NaN)
-        temp_df = df[['Fc','Ta','ustar']][df['Fsd'] < d['radiation_threshold']].dropna(how = 'any',axis=0)        
-
-        # Arrange data into seasons 
-        # try: may be insufficient data, needs to be handled; if insufficient on first pass then return empty,otherwise next pass
-        # this will be a marginal case, will almost always be enough data in bootstraps if enough in obs data
-        years_df, seasons_df, results_df = sort(temp_df, d['flux_period'], years_index)
-        
-        # Use the results df index as an iterator to run the CPD algorithm on the year/season/temperature strata
+        # Arrange data into seasons and analyze fits
         print 'Finding change points...'
+        seasons_df = sort(work_df)
+        results_df = pd.DataFrame({'Ta_mean': seasons_df['Ta'].
+                                   groupby(['Year', 'Season', 
+                                            'T_class']).mean()})
+        results_df.columns = ['Ta_mean']
         stats_df = pd.DataFrame(map(lambda x: fit(seasons_df.loc[x]), 
                                     results_df.index),
                                 index = results_df.index)
         results_df = results_df.join(stats_df)
         print 'Done!'
-        
-        results_df['bMod_CP'] = results_df['bMod_CP'].astype(int)
-        results_df['aMod_CP'] = results_df['aMod_CP'].astype(int)
 
-        # QC the results
-        print 'Doing within-sample QC...'
-        results_df = QC1(results_df)
-        print 'Done!' 
-
-        # Output results and plots (if user has set output flags in config file to true)
-        if bootstrap_flag == False:
-            if 'results_output_path' in d.keys(): 
-                print 'Outputting results for all years / seasons / T classes in observational dataset'
-                results_df.to_csv(os.path.join(d['results_output_path'],'Observational_ustar_threshold_statistics.csv'))
-            if 'plot_output_path' in d.keys(): 
-                print 'Doing plotting for observational data'
-                for j in results_df.index:
-                    plot_fits(seasons_df.loc[j], results_df.loc[j], d['plot_output_path'])
 
         # Drop the season and temperature class levels from the hierarchical index, 
         # drop all cases that failed QC
-        results_df = results_df.reset_index(level=['season', 'T_class'], drop = True)
-        results_df = results_df[results_df['b_valid'] == True]
+        results_df = results_df.reset_index(level=['Season', 'T_class'], drop = True)
+
+        return results_df
         
         # If first pass, create a df to concatenate the results for each individual run
         # Otherwise concatenate all_results_df with current results_df
@@ -474,11 +428,7 @@ def plot_slopes(df,plot_out):
 #------------------------------------------------------------------------------
 # Quality control within bootstrap
 def QC1(QC1_df):
-    
-    # Set significance level (these need to be moved, and a model needs to be explicitly calculated for a threshold)    
-    fmax_a_threshold = 6.9
-    fmax_b_threshold = 6.9
-    
+       
     QC1_df['major_mode'] = True
 
     # For each year, find all cases that belong to minority mode (i.e. mode is sign of slope below change point)
@@ -491,20 +441,7 @@ def QC1(QC1_df):
         sign = 1 if neg_slope.loc[i] < 50 else -1
         QC1_df.loc[i, 'major_mode'] = np.sign(np.array(QC1_df.loc[i, 'b1'])) == sign
     
-    # Make invalid (False) all b_model cases where: 1) fit not significantly better than null model; 
-    #                                               2) best fit at extreme ends;
-    #                                               3) case belongs to minority mode (for that year)
-    QC1_df['b_valid'] = ((QC1_df['bMod_f_max'] > fmax_b_threshold)
-                         & (QC1_df['bMod_CP'] > 4)
-                         & (QC1_df['bMod_CP'] < 45)
-                         & (QC1_df['major_mode'] == True))
 
-    # Make invalid (False) all a_model cases where: 1) fit not significantly better than null model; 
-    #                                               2) slope below change point not statistically significant;
-    #                                               3) slope above change point statistically significant
-    QC1_df['a_valid'] = ((QC1_df['aMod_f_max'] > fmax_a_threshold)
-                         & (QC1_df['a1p'] < 0.05)
-                         & (QC1_df['a2p'] > 0.05))
 
     # Return the results df
     QC1_df = QC1_df.drop('major_mode', axis = 1)
@@ -537,18 +474,19 @@ def QC2(df,output_df,bootstrap_n):
     
 #------------------------------------------------------------------------------
 
-
-
 #------------------------------------------------------------------------------
-def sort(df, flux_period, years_index):
-    
-    # Set the bin size on the basis of the flux measurement frequency
-    season_n = 1000 if flux_period == 30 else 600
-    bin_n = 5 if flux_period == 30 else 3
-    
+def sort(df):
+
+    # Set the bin size on the basis of the flux measurement frequency    
+    interval = int(filter(lambda x: x.isdigit(), 
+                          pd.infer_freq(df.index)))
+    assert interval % 30 == 0
+    season_n = 1000 if interval == 30 else 600
+    bin_n = 5 if interval == 30 else 3
+
     # Create a df containing count stats for the variables for all available years
-    df = df.loc[df['Fsd'] < 10, ['Fc', 'ustar', 'Ta']].copy()
-    years_df = df[['Fc', 'ustar']].dropna().groupby([lambda x: x.year]).count()
+    df = df.loc[df['Fsd'] < 10, ['Fc', 'ustar', 'Ta']].dropna().copy()
+    years_df = df[['Fc', 'ustar']].groupby([lambda x: x.year]).count()
     years_df.drop('ustar', axis = 1, inplace = True)
     years_df.columns = ['n_valid']
     years_df['n_seasons'] = map(lambda x: years_df.loc[x, 'n_valid'] / 
@@ -564,10 +502,9 @@ def sort(df, flux_period, years_index):
                ' (excluded from analysis)'.format(exclude_years_str))
         years_df = years_df.loc[years_df['seasons'] > 0]
 
-    # Extract overlapping series, for each of which:
-    # 1) sort by temperature; 2) create temperature class; 
-    # 3) sort temperature class by ustar; 4) add bin number to temperature 
-    #    class, then concatenate
+    # Extract overlapping series to individual dataframes, for each of which: 
+    # 1) sort by temperature; 2) create temperature class; 3) sort temperature 
+    # class by u*; 4) add bin numbers to each class, then; 5) concatenate
     lst = []
     T_array = np.concatenate(map(lambda x: np.tile(x, season_n / 4), range(4)))
     bin_array = np.tile(np.concatenate(map(lambda x: np.tile(x, bin_n), 
@@ -585,47 +522,25 @@ def sort(df, flux_period, years_index):
                                     this_df.loc[this_df.T_class == x]
                                     .sort_values('ustar', axis = 0), 
                                     range(4)))
-            this_df['Bin'] = bin_array    
+            this_df['Bin'] = bin_array
+            if any(np.isnan(this_df.ustar)): pdb.set_trace()
             lst.append(this_df)
     seasons_df = pd.concat([frame for frame in lst])
 
-    # Make a hierarchical index for year, season, temperature class, bin for the seasons dataframe
-    years_index=np.concatenate([np.int32(np.tile(year, years_df.loc[year, 'n_seasons'] * season_n)) 
-                                for year in years_df.index])
-    
-    seasons_index=np.concatenate([np.concatenate([np.int32(np.ones(season_n)*(season+1)) 
-                                                  for season in xrange(years_df.loc[year, 'n_seasons'])]) 
-                                                  for year in years_df.index])
-
-    Tclass_index=np.tile(np.concatenate([np.int32(np.ones(season_n/4)*(i+1)) for i in xrange(4)]),
-                         len(seasons_index)/season_n)
-    
-    bin_index=np.tile(np.int32(np.arange(season_n/4)/(season_n/200)),len(seasons_df)/(season_n/4))
-
-    # Zip together hierarchical index and add to df
-    arrays = [years_index, seasons_index, Tclass_index]
+    # Construct multiindex and use Year, Season, T_class and Bin as levels,
+    # drop them as df variables then average by bin and drop it from the index
+    arrays = [seasons_df.Year.values, seasons_df.Season.values, 
+              seasons_df.T_class.values, seasons_df.Bin.values]
+    name_list = ['Year', 'Season', 'T_class', 'Bin']
     tuples = list(zip(*arrays))
-    hierarchical_index = pd.MultiIndex.from_tuples(tuples, names = ['year','season','T_class'])
+    hierarchical_index = pd.MultiIndex.from_tuples(tuples, 
+                                                   names = name_list)
     seasons_df.index = hierarchical_index
+    seasons_df.drop(name_list, axis = 1, inplace = True)
+    seasons_df = seasons_df.groupby(level = name_list).mean()
+    seasons_df.reset_index(level = ['Bin'], drop = True, inplace = True)
 
-    pdb.set_trace()
-    
-    # Set up the results df
-    results_df = pd.DataFrame({'T_avg':seasons_df['Ta'].groupby(level = ['year','season','T_class']).mean()})
-
-
-    
-    # Sort the seasons by ustar, then bin average and drop the bin level from the index
-    seasons_df = pd.concat([seasons_df.loc[i[0]].loc[i[1]].loc[i[2]].sort_values('ustar', axis=0) for i in results_df.index])
-    pdb.set_trace()
-    seasons_df.index = hierarchical_index
-    seasons_df = seasons_df.set_index(bin_index, append = True)
-    seasons_df.index.names = ['year','season','T_class','bin']
-    seasons_df = seasons_df.groupby(level=['year','season','T_class','bin']).mean()
-    seasons_df = seasons_df.reset_index(level = ['bin'], drop = True)
-    seasons_df = seasons_df[['ustar','Fc']]
-    
-    return years_df, seasons_df, results_df
+    return seasons_df
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------

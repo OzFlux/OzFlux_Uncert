@@ -3,13 +3,10 @@
 # Python modules
 import matplotlib.pyplot as plt
 import matplotlib.mlab as mlab
-import datetime as dt
 import numpy as np
 import pandas as pd
 from scipy import stats
 import os
-import sys
-#from scipy.interpolate import interp1d
 from scipy.interpolate import PchipInterpolator
 import pdb
 
@@ -18,7 +15,7 @@ import pdb
 #------------------------------------------------------------------------------
 class change_point_detect(object):
     
-    def __init__(self, dataframe, n_bootstraps = 1):
+    def __init__(self, dataframe, n_bootstraps = 1, write_dir = None):
 
         interval = int(filter(lambda x: x.isdigit(), 
                               pd.infer_freq(dataframe.index)))
@@ -29,7 +26,7 @@ class change_point_detect(object):
 
     #------------------------------------------------------------------------------
     # Coordinate steps in CPD process
-    def main(self):
+    def main(self, save_to_dir = None):
         """
         This script fetches data from an OzFluxQC .nc file and applies change point detection
         algorithms to the nocturnal C flux data to provide a best estimate for the u*threshold, 
@@ -54,24 +51,14 @@ class change_point_detect(object):
     
         # Bootstrap the data and run the CPD algorithm
         for i in xrange(self.n_bootstraps):
-                
-            # First pass is obs, otherwise use bootstraps
-            try:
-                assert i > 0         
-                work_df = pd.concat(map(lambda x: bootstrap(self.df.loc[str(x)]),
-                                        list(set(self.df.index.year)))).copy()
-                print 'Analysing bootstrap {}'.format(str(i))
-            except:
-                work_df = self.df.copy()
-                print 'Analysing observational data for first pass'
-            
+                            
             # Arrange data into seasons and analyze fits
             print 'Finding change points...'
-            seasons_df = sort_data(work_df, self.interval)
+            seasons_df = self.data_to_seasons()
             interim_results_df = pd.DataFrame({'Ta_mean': seasons_df['Ta'].
                                                groupby(['Year', 'Season', 
                                                         'T_class']).mean()})
-            stats_df = pd.DataFrame(map(lambda x: fit(seasons_df.loc[x]), 
+            stats_df = pd.DataFrame(map(lambda x: self.fit(seasons_df.loc[x]), 
                                         interim_results_df.index),
                                     index = interim_results_df.index)
             interim_results_df = interim_results_df.join(stats_df)
@@ -87,6 +74,7 @@ class change_point_detect(object):
         print 'Starting QC'    
         
         final_results_df.sort_index(inplace = True)
+        
         return final_results_df
 #        
 #        # Drop all years with no data remaining after QC, and return nothing if all years were dropped
@@ -126,76 +114,194 @@ class change_point_detect(object):
 #        # Return final results
 #        return output_stats_df    
 #    #------------------------------------------------------------------------------
+    def qc_this(self, df):
+        
+        d_mode = len(test.loc[test.b1 > 0, 'b1'].dropna())
+        e_mode = len(test.loc[test.b1 < 0, 'b1'].dropna())
+        if e_mode > d_mode:
+            df = df.loc[df.b1 < 0]
+        else:
+            df = df.loc[df.b1 < 0]
 
     #------------------------------------------------------------------------------
-def sort_data(df, interval):
+    def data_to_seasons(self, resample = True):
+    
+        season_n = 1000 if self.interval == 30 else 600
+        bin_n = 5 if self.interval == 30 else 3
+    
+        # Create a df containing count stats for the variables for all available years
+        work_df = self.df.loc[self.df['Fsd'] < 10, 
+                              ['Fc', 'ustar', 'Ta']].copy()
+        if resample:
+            work_df = pd.concat(map(lambda x: self._bootstrap(work_df.loc[str(x)]),
+                                    sorted(list(set(work_df.index.year)))))
+        work_df.dropna(inplace = True)
+        years_df = work_df[['Fc', 'ustar']].groupby([lambda x: x.year]).count()
+        years_df.drop('ustar', axis = 1, inplace = True)
+        years_df.columns = ['n_valid']
+        years_df['n_seasons'] = map(lambda x: years_df.loc[x, 'n_valid'] / 
+                                    (season_n / 2) - 1, years_df.index)
+        years_df['n_seasons'].fillna(0, inplace=True)
+        if np.all(years_df['n_seasons'] == 0):
+            print('No years with sufficient data for evaluation. Returning...')
+            return
+        if np.any(years_df['n_seasons'] == 0):
+            exclude_years_list = years_df[years_df['n_seasons'] <= 0].index.tolist()
+            exclude_years_str =  ','.join(map(str, exclude_years_list))
+            print ('Insufficient data for evaluation in the following years: {}'
+                   ' (excluded from analysis)'.format(exclude_years_str))
+            years_df = years_df.loc[years_df['seasons'] > 0]
+    
+        # Extract overlapping series to individual dataframes, for each of which: 
+        # 1) sort by temperature; 2) create temperature class; 3) sort temperature 
+        # class by u*; 4) add bin numbers to each class, then; 5) concatenate
+        lst = []
+        T_array = np.concatenate(map(lambda x: np.tile(x, season_n / 4), range(4)))
+        bin_array = np.tile(np.concatenate(map(lambda x: np.tile(x, bin_n), 
+                                               range(50))), 4)
+        for year in years_df.index:
+            for season in xrange(years_df.loc[year, 'n_seasons']):
+                start_ind = season * (season_n / 2)
+                end_ind = season * (season_n / 2) + season_n
+                this_df = work_df.loc[str(year)].iloc[start_ind: end_ind]
+                this_df.sort_values('Ta', axis = 0, inplace = True)
+                this_df['Year'] = this_df.index.year
+                this_df['Season'] = season + 1
+                this_df['T_class'] = T_array
+                this_df = pd.concat(map(lambda x: 
+                                        this_df.loc[this_df.T_class == x]
+                                        .sort_values('ustar', axis = 0), 
+                                        range(4)))
+                this_df['Bin'] = bin_array
+                lst.append(this_df)
+        seasons_df = pd.concat([frame for frame in lst])
+    
+        # Construct multiindex and use Year, Season, T_class and Bin as levels,
+        # drop them as df variables then average by bin and drop it from the index
+        arrays = [seasons_df.Year.values, seasons_df.Season.values, 
+                  seasons_df.T_class.values, seasons_df.Bin.values]
+        name_list = ['Year', 'Season', 'T_class', 'Bin']
+        tuples = list(zip(*arrays))
+        hierarchical_index = pd.MultiIndex.from_tuples(tuples, 
+                                                       names = name_list)
+        seasons_df.index = hierarchical_index
+        seasons_df.drop(name_list, axis = 1, inplace = True)
+        seasons_df = seasons_df.groupby(level = name_list).mean()
+        seasons_df.reset_index(level = ['Bin'], drop = True, inplace = True)
+    
+        return seasons_df
+    #------------------------------------------------------------------------------
 
-    season_n = 1000 if interval == 30 else 600
-    bin_n = 5 if interval == 30 else 3
+    #------------------------------------------------------------------------------
+    def fit(self, season_df):
+        
+        def a_model_statistics(cp):
+            work_df = season_df.copy()
+            work_df['ustar_a1'] = work_df['ustar']
+            work_df['ustar_a1'].iloc[cp + 1:] = work_df['ustar_a1'].iloc[cp]
+            dummy_array = np.concatenate([np.zeros(cp + 1), 
+                                          np.ones(df_length - (cp + 1))])
+            work_df['ustar_a2'] = (work_df['ustar'] - 
+                                   work_df['ustar'].iloc[cp]) * dummy_array
+            reg_params = np.linalg.lstsq(work_df[['int','ustar_a1','ustar_a2']],
+                                         work_df['Fc'])[0]
+            yHat = (reg_params[0] + reg_params[1] * work_df['ustar_a1'] +
+                    reg_params[2] * work_df['ustar_a2'])
+            SSE_full = ((work_df['Fc'] - yHat)**2).sum()
+            f_score = (SSE_null_a - SSE_full) / (SSE_full / (df_length - 2))
+            return f_score, reg_params
+        
+        def b_model_statistics(cp):
+            work_df = season_df.copy()
+            work_df['ustar_b'] = work_df['ustar']
+            work_df['ustar_b'].iloc[cp + 1:] = work_df['ustar_b'].iloc[cp]
+            reg_params = np.linalg.lstsq(work_df[['int','ustar_b']], 
+                                         work_df['Fc'])[0]
+            yHat = reg_params[0] + reg_params[1] * work_df['ustar_b']
+            SSE_full = ((work_df['Fc'] - yHat)**2).sum()
+            f_score = (SSE_null_b - SSE_full) / (SSE_full / (df_length - 2))
+            return f_score, reg_params
+            
+        # Get stuff ready
+        season_df = season_df.reset_index(drop = True)
+        season_df = season_df.astype(np.float64)        
+        df_length = len(season_df)
+        endpts_threshold = np.floor(df_length * 0.05)
+        if endpts_threshold < 3: endpts_threshold = 3
+        psig = 0.05
+        
+        # Calculate null model SSE for operational (b) and diagnostic (a) model
+        SSE_null_b = ((season_df['Fc'] - season_df['Fc'].mean())**2).sum()
+        alpha0 , alpha1 = stats.linregress(season_df['ustar'], 
+                                           season_df['Fc'])[:2]
+        SSE_null_a = ((season_df['Fc'] - (season_df['ustar'] * 
+                                          alpha0 + alpha1))**2).sum()
+        
+        # Create arrays to hold statistics
+        f_a_array = np.zeros(df_length)
+        f_b_array = np.zeros(df_length)
+        
+        # Add series to df for numpy linalg
+        season_df['int'] = np.ones(df_length)
+            
+        # Iterate through all possible change points 
+        for i in xrange(1, df_length - 1):
+                  
+            # Diagnostic (a) and operational (b) model statistics
+            f_a_array[i] = a_model_statistics(i)[0]
+            f_b_array[i] = b_model_statistics(i)[0]
+    
+        # Get max f-score, associated change point and ustar value for models
+        # (conditional on passing f score and end points within limits)
+        d = {}
+        fmax_a, cp_a = f_a_array.max(), int(f_a_array.argmax())
+        if ((cp_a > endpts_threshold) | (cp_a < df_length - endpts_threshold)):
+            p_a = critical_f(fmax_a, df_length, model = 'a')
+            if p_a < psig:
+                d['ustar_th_a'] = season_df['ustar'].iloc[cp_a]
+                d['a0'], d['a1'], d['a2'] = a_model_statistics(cp_a)[1] 
+    
+    #            d['norm_a1'] = a1 * (ustar_th_a / (a0 + a1 * ustar_th_a))
+    #            d['norm_a2'] = a2 * (ustar_th_a / (a0 + a1 * ustar_th_a))
+                          
+        fmax_b, cp_b = f_b_array.max(), int(f_b_array.argmax())
 
-    # Create a df containing count stats for the variables for all available years
-    df = df.loc[df['Fsd'] < 10, ['Fc', 'ustar', 'Ta']].dropna().copy()
-    years_df = df[['Fc', 'ustar']].groupby([lambda x: x.year]).count()
-    years_df.drop('ustar', axis = 1, inplace = True)
-    years_df.columns = ['n_valid']
-    years_df['n_seasons'] = map(lambda x: years_df.loc[x, 'n_valid'] / 
-                                (season_n / 2) - 1, years_df.index)
-    years_df['n_seasons'].fillna(0, inplace=True)
-    if np.all(years_df['n_seasons'] == 0):
-        print('No years with sufficient data for evaluation. Returning...')
-        return
-    if np.any(years_df['n_seasons'] == 0):
-        exclude_years_list = years_df[years_df['n_seasons'] <= 0].index.tolist()
-        exclude_years_str= ','.join(map(str, exclude_years_list))
-        print ('Insufficient data for evaluation in the following years: {}'
-               ' (excluded from analysis)'.format(exclude_years_str))
-        years_df = years_df.loc[years_df['seasons'] > 0]
+        if ((cp_b > endpts_threshold) | (cp_b < df_length - endpts_threshold)):
+            p_b = critical_f(fmax_b, len(season_df), model = 'b')
+            if p_b < psig:    
+                d['ustar_th_b'] = season_df['ustar'].iloc[cp_b]
+                d['b0'], d['b1'] = b_model_statistics(cp_b)[1]
+    
+        return d
+    
+    #------------------------------------------------------------------------------
 
-    # Extract overlapping series to individual dataframes, for each of which: 
-    # 1) sort by temperature; 2) create temperature class; 3) sort temperature 
-    # class by u*; 4) add bin numbers to each class, then; 5) concatenate
-    lst = []
-    T_array = np.concatenate(map(lambda x: np.tile(x, season_n / 4), range(4)))
-    bin_array = np.tile(np.concatenate(map(lambda x: np.tile(x, bin_n), 
-                                           range(50))), 4)
-    for year in years_df.index:
-        for season in xrange(years_df.loc[year, 'n_seasons']):
-            start_ind = season * (season_n / 2)
-            end_ind = season * (season_n / 2) + season_n
-            this_df = df.loc[str(year)].iloc[start_ind: end_ind]
-            this_df.sort_values('Ta', axis = 0, inplace = True)
-            this_df['Year'] = this_df.index.year
-            this_df['Season'] = season + 1
-            this_df['T_class'] = T_array
-            this_df = pd.concat(map(lambda x: 
-                                    this_df.loc[this_df.T_class == x]
-                                    .sort_values('ustar', axis = 0), 
-                                    range(4)))
-            this_df['Bin'] = bin_array
-            lst.append(this_df)
-    seasons_df = pd.concat([frame for frame in lst])
 
-    # Construct multiindex and use Year, Season, T_class and Bin as levels,
-    # drop them as df variables then average by bin and drop it from the index
-    arrays = [seasons_df.Year.values, seasons_df.Season.values, 
-              seasons_df.T_class.values, seasons_df.Bin.values]
-    name_list = ['Year', 'Season', 'T_class', 'Bin']
-    tuples = list(zip(*arrays))
-    hierarchical_index = pd.MultiIndex.from_tuples(tuples, 
-                                                   names = name_list)
-    seasons_df.index = hierarchical_index
-    seasons_df.drop(name_list, axis = 1, inplace = True)
-    seasons_df = seasons_df.groupby(level = name_list).mean()
-    seasons_df.reset_index(level = ['Bin'], drop = True, inplace = True)
+    #------------------------------------------------------------------------------
+    # Return a bootstrapped sample of the passed dataframe
+    def _bootstrap(self, df):
+        return df.iloc[sorted(np.random.randint(0, len(df) - 1, len(df)))]
+    #------------------------------------------------------------------------------
 
-    return seasons_df
-#------------------------------------------------------------------------------
+    def plot_this(self, df):
+        
+        plot_df = df.copy()
+        stats_df = pd.DataFrame(self.fit(df), index = [0])
+        ustar_b = stats_df.ustar_th_b.iloc[0]
+        cp_b = np.where(df.ustar == ustar_b)[0].item()
+        plot_df['ustar_b'] = ustar_b
+        plot_df['ustar_b'].iloc[:cp_b] = plot_df['ustar'].iloc[:cp_b]
+        plot_df['yHat_b'] = plot_df['ustar_b'] * stats_df.b1.item() + stats_df.b0.item()
+        
+        # Now plot    
+        fig, ax = plt.subplots(1, 1, figsize = (14, 8))
+        fig.patch.set_facecolor('white')
+#        ax.title('Year: '+str(stats_df.name[0])+', Season: '+str(stats_df.name[1])+', T class: '+str(stats_df.name[2])+'\n',fontsize=22)
+        ax.set_xlabel(r'u* ($m\/s^{-1}$)', fontsize = 16)
+        ax.set_ylabel(r'Fc ($\mu mol C\/m^{-2} s^{-1}$)', fontsize = 16)
+        ax.plot(plot_df.ustar, plot_df.Fc, 'bo')
+        ax.plot(plot_df.ustar, plot_df.yHat_b, color = 'red')
 
-#------------------------------------------------------------------------------
-# Return a bootstrapped sample of the passed dataframe
-def bootstrap(df):
-    return df.iloc[sorted(np.random.randint(0, len(df) - 1, len(df)))]
-#------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
 def critical_f(f_max, n, model):
@@ -271,88 +377,7 @@ def critical_f(f_max, n, model):
     return p
 #------------------------------------------------------------------------------
 
-#------------------------------------------------------------------------------
-def fit(df):
-    
-    def a_model_statistics(cp):
-        work_df = temp_df.copy()
-        work_df['ustar_a1'] = work_df['ustar']
-        work_df['ustar_a1'].iloc[cp + 1:] = work_df['ustar_a1'].iloc[cp]
-        dummy_array = np.concatenate([np.zeros(cp + 1), 
-                                      np.ones(df_length - (cp + 1))])
-        work_df['ustar_a2'] = (work_df['ustar'] - 
-                               work_df['ustar'].iloc[cp]) * dummy_array
-        reg_params = np.linalg.lstsq(work_df[['int','ustar_a1','ustar_a2']],
-                                     work_df['Fc'])[0]
-        yHat = (reg_params[0] + reg_params[1] * work_df['ustar_a1'] +
-                reg_params[2] * work_df['ustar_a2'])
-        SSE_full = ((work_df['Fc'] - yHat)**2).sum()
-        f_score = (SSE_null_a - SSE_full) / (SSE_full / (df_length - 2))
-        return f_score, reg_params
-    
-    def b_model_statistics(cp):
-        work_df = temp_df.copy()
-        work_df['ustar_b'] = work_df['ustar']
-        work_df['ustar_b'].iloc[cp + 1:] = work_df['ustar_b'].iloc[cp]
-        reg_params = np.linalg.lstsq(work_df[['int','ustar_b']], 
-                                     work_df['Fc'])[0]
-        yHat = reg_params[0] + reg_params[1] * work_df['ustar_b']
-        SSE_full = ((work_df['Fc'] - yHat)**2).sum()
-        f_score = (SSE_null_b - SSE_full) / (SSE_full / (df_length - 2))
-        return f_score, reg_params
-        
-    # Get stuff ready
-    temp_df = df.copy()
-    temp_df = temp_df.reset_index(drop = True)
-    temp_df = temp_df.astype(np.float64)        
-    df_length = len(temp_df)
-    endpts_threshold = np.floor(df_length * 0.05)
-    if endpts_threshold < 3: endpts_threshold = 3
-    psig = 0.05
-    
-    # Calculate null model SSE for operational (b) and diagnostic (a) model
-    SSE_null_b = ((temp_df['Fc'] - temp_df['Fc'].mean())**2).sum()
-    alpha0 , alpha1 = stats.linregress(temp_df['ustar'], temp_df['Fc'])[:2]
-    SSE_null_a = ((temp_df['Fc'] - (temp_df['ustar'] * 
-                                    alpha0 + alpha1))**2).sum()
-    
-    # Create arrays to hold statistics
-    f_a_array = np.zeros(df_length)
-    f_b_array = np.zeros(df_length)
-    
-    # Add series to df for numpy linalg
-    temp_df['int'] = np.ones(df_length)
-        
-    # Iterate through all possible change points 
-    for i in xrange(1, df_length - 1):
-              
-        # Diagnostic (a) and operational (b) model statistics
-        f_a_array[i] = a_model_statistics(i)[0]
-        f_b_array[i] = b_model_statistics(i)[0]
 
-    # Get max f-score, associated change point and ustar value for models
-    # (conditional on passing f score and end points within limits)
-    d = {}
-    fmax_a, cp_a = f_a_array.max(), int(f_a_array.argmax())
-    if ((cp_a > endpts_threshold) | (cp_a < df_length - endpts_threshold)):
-        p_a = critical_f(fmax_a, df_length, model = 'a')
-        if p_a < psig:
-            d['ustar_th_a'] = temp_df['ustar'].iloc[cp_a]
-            d['a0'], d['a1'], d['a2'] = a_model_statistics(cp_a)[1] 
-
-#            d['norm_a1'] = a1 * (ustar_th_a / (a0 + a1 * ustar_th_a))
-#            d['norm_a2'] = a2 * (ustar_th_a / (a0 + a1 * ustar_th_a))
-                      
-    fmax_b, cp_b = f_b_array.max(), int(f_b_array.argmax())
-    if ((cp_b > endpts_threshold) | (cp_b < df_length - endpts_threshold)):
-        p_b = critical_f(fmax_b, len(temp_df), model = 'b')
-        if p_b < psig:    
-            d['ustar_th_b'] = temp_df['ustar'].iloc[cp_b]
-            d['b0'], d['b1'] = b_model_statistics(cp_b)[1]
-
-    return d
-
-#------------------------------------------------------------------------------
 
 
 #------------------------------------------------------------------------------

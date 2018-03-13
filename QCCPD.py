@@ -18,7 +18,7 @@ import pdb
 #------------------------------------------------------------------------------
 class change_point_detect(object):
     
-    def __init__(self, dataframe, n_bootstraps = 10):
+    def __init__(self, dataframe, n_bootstraps = 1):
 
         interval = int(filter(lambda x: x.isdigit(), 
                               pd.infer_freq(dataframe.index)))
@@ -71,7 +71,6 @@ class change_point_detect(object):
             interim_results_df = pd.DataFrame({'Ta_mean': seasons_df['Ta'].
                                                groupby(['Year', 'Season', 
                                                         'T_class']).mean()})
-            interim_results_df.columns = ['Ta_mean']
             stats_df = pd.DataFrame(map(lambda x: fit(seasons_df.loc[x]), 
                                         interim_results_df.index),
                                     index = interim_results_df.index)
@@ -83,54 +82,50 @@ class change_point_detect(object):
                                                                 drop = True)
     
             final_results_df = pd.concat([final_results_df, interim_results_df])       
-            
-    #        # Iterate counters for each year for each bootstrap
-    #        for i in years_df.index:
-    #            counts_df.loc[i, 'Total'] = counts_df.loc[i, 'Total'] + years_df.loc[i, 'seasons'] * 4
-    
+                
         print 'Finished change point detection for all bootstraps'
         print 'Starting QC'    
         
         final_results_df.sort_index(inplace = True)
         return final_results_df
-        
-        # Drop all years with no data remaining after QC, and return nothing if all years were dropped
-        [counts_df.drop(i,inplace=True) for i in counts_df.index if counts_df.loc[i, 'Total'] == 0]    
-        if counts_df.empty:
-            sys.exit('Insufficient data for analysis... exiting')
-    
-        # QC the combined results
-        print 'Doing cross-sample QC...'
-        output_stats_df = QC2(all_results_df, counts_df, d['num_bootstraps'])
-        print 'Done!' 
-    
-        # Calculate final values
-        print 'Calculating final results' 
-        output_stats_df = stats_calc(all_results_df, output_stats_df)
-        
-        # If requested by user, plot: 1) histograms of u* thresholds for each year; 
-        #                             2) normalised a1 and a2 values
-        if 'plot_output_path' in d.keys():
-            print 'Plotting u* histograms for all valid b model thresholds for all valid years'
-            [plot_hist(all_results_df.loc[j, 'bMod_threshold'][all_results_df.loc[j, 'b_valid'] == True],
-                       output_stats_df.loc[j, 'ustar_mean'],
-                       output_stats_df.loc[j, 'ustar_sig'],
-                       output_stats_df.loc[j, 'crit_t'],
-                       j, d['plot_output_path'])
-             for j in output_stats_df.index]
-            
-            print 'Plotting normalised median slope parameters for all valid a model thresholds for all valid years'
-            plot_slopes(output_stats_df[['norm_a1_median', 'norm_a2_median']], d['plot_output_path'])    
-        
-        # Output final stats if requested by user
-        if 'results_output_path' in d.keys():
-            print 'Outputting final results'
-            output_stats_df.to_csv(os.path.join(d['results_output_path'], 'annual_statistics.csv'))    
-        
-        print 'Analysis complete!'
-        # Return final results
-        return output_stats_df    
-    #------------------------------------------------------------------------------
+#        
+#        # Drop all years with no data remaining after QC, and return nothing if all years were dropped
+#        [counts_df.drop(i,inplace=True) for i in counts_df.index if counts_df.loc[i, 'Total'] == 0]    
+#        if counts_df.empty:
+#            sys.exit('Insufficient data for analysis... exiting')
+#    
+#        # QC the combined results
+#        print 'Doing cross-sample QC...'
+#        output_stats_df = QC2(all_results_df, counts_df, d['num_bootstraps'])
+#        print 'Done!' 
+#    
+#        # Calculate final values
+#        print 'Calculating final results' 
+#        output_stats_df = stats_calc(all_results_df, output_stats_df)
+#        
+#        # If requested by user, plot: 1) histograms of u* thresholds for each year; 
+#        #                             2) normalised a1 and a2 values
+#        if 'plot_output_path' in d.keys():
+#            print 'Plotting u* histograms for all valid b model thresholds for all valid years'
+#            [plot_hist(all_results_df.loc[j, 'bMod_threshold'][all_results_df.loc[j, 'b_valid'] == True],
+#                       output_stats_df.loc[j, 'ustar_mean'],
+#                       output_stats_df.loc[j, 'ustar_sig'],
+#                       output_stats_df.loc[j, 'crit_t'],
+#                       j, d['plot_output_path'])
+#             for j in output_stats_df.index]
+#            
+#            print 'Plotting normalised median slope parameters for all valid a model thresholds for all valid years'
+#            plot_slopes(output_stats_df[['norm_a1_median', 'norm_a2_median']], d['plot_output_path'])    
+#        
+#        # Output final stats if requested by user
+#        if 'results_output_path' in d.keys():
+#            print 'Outputting final results'
+#            output_stats_df.to_csv(os.path.join(d['results_output_path'], 'annual_statistics.csv'))    
+#        
+#        print 'Analysis complete!'
+#        # Return final results
+#        return output_stats_df    
+#    #------------------------------------------------------------------------------
 
     #------------------------------------------------------------------------------
 def sort_data(df, interval):
@@ -177,7 +172,6 @@ def sort_data(df, interval):
                                     .sort_values('ustar', axis = 0), 
                                     range(4)))
             this_df['Bin'] = bin_array
-            if any(np.isnan(this_df.ustar)): pdb.set_trace()
             lst.append(this_df)
     seasons_df = pd.concat([frame for frame in lst])
 

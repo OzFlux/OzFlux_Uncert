@@ -15,97 +15,95 @@ import pdb
 #------------------------------------------------------------------------------
 class change_point_detect(object):
     
-    def __init__(self, dataframe, n_bootstraps = 1, write_dir = None):
+    def __init__(self, dataframe, resample = True, write_dir = None):
 
         self.df = dataframe
         interval = int(filter(lambda x: x.isdigit(), 
                               pd.infer_freq(self.df.index)))
         assert interval % 30 == 0
+        self.resample = resample
         self.interval = interval
         self.season_n = 1000 if interval == 30 else 600
         self.bin_n = 5 if interval == 30 else 3
-        self.n_bootstraps = n_bootstraps
 #------------------------------------------------------------------------------
-    
+
     #--------------------------------------------------------------------------
-    
-    #--------------------------------------------------------------------------
-    def data_availability_by_year(self):
+    def _cross_sample_QC(self, df, n_trials):
         
-        years_list = sorted(list(set(self.df.index.year)))
-        availability_dict = {}
-        for year in years_list:
-            df = self.get_sample_data(df = self.df.loc[str(year)])
-            n_seasons = len(df) / (self.season_n / 2) - 1
-            availability_dict[year] = True if n_seasons > 0 else False
-        return availability_dict
+        d_mode = len(df.loc[df.b1 > 0, 'b1'])
+        e_mode = len(df.loc[df.b1 < 0, 'b1'])
+        if e_mode > d_mode:
+            df.loc[df.b1 > 0, ['ustar_th_b', 'b0', 'b1']] = np.nan
+        else:
+            df.loc[df.b1 < 0, ['ustar_th_b', 'b0', 'b1']] = np.nan
+        if len(df) < n_trials * 4:
+            raise RuntimeError('Valid change points below critical threshold!')
+        return df
+    #--------------------------------------------------------------------------
+
+    #--------------------------------------------------------------------------
+    def get_change_point(self, df, n_trials = 1):
+        
+        print '- bootstrap #',
+        results_list = []
+        for trial in xrange(n_trials):
+            print str(trial + 1),
+            index_df = pd.DataFrame({'Ta_mean': df['Ta'].
+                                     groupby(['Season', 
+                                              'T_class']).mean()})
+            results_df = pd.DataFrame(map(lambda x: self.fit(df.loc[x]), 
+                                          index_df.index),
+                                      index = index_df.index)
+            results_df = results_df.join(index_df)
+            results_list.append(results_df)
+        print 'Done'
+        return self._cross_sample_QC(pd.concat(results_list).
+                                   reset_index(drop = True),
+                                   n_trials)
     #--------------------------------------------------------------------------
     
     #--------------------------------------------------------------------------
-    def get_sample_data(self, df, resample = True):
+    def get_change_point_by_year(self, n_trials):
+
+        if not self.resample:
+            print ('Multiple trials without resampling are redundant! Setting '
+                   'n_trials to 1...')
+            n_trials = 1        
+        seasons_dict = self.get_season_data_by_year()
+        if not seasons_dict:
+            raise RuntimeError('No valid data for analysis!')
+        print 'Finding change points for year: '
+        cp_dict = {}
+        for year in sorted(seasons_dict.keys()):
+            print str(year),
+            cp_dict[year] = self.get_change_point(seasons_dict[year], n_trials)
+        return cp_dict
+    #--------------------------------------------------------------------------
+
+    #--------------------------------------------------------------------------
+    def get_sample_data(self, df):
         
         temp_df = df.loc[df['Fsd'] < 10, ['Fc', 'ustar', 'Ta']].dropna()
-        if not resample:
+        if not self.resample:
             return temp_df
         else:
             return temp_df.iloc[sorted(np.random.randint(0, 
                                                          len(temp_df) - 1, 
                                                          len(temp_df)))]
     #--------------------------------------------------------------------------
-
+       
     #--------------------------------------------------------------------------
-    def change_point_by_year(self, n_trials):
+    def get_sample_data_by_year(self):
         
-        print 'Finding change points for year: '
-        availability_dict = self.data_availability_by_year()
+        years_list = sorted(list(set(self.df.index.year)))
         years_dict = {}
-        for year in sorted(availability_dict.keys()):
-            if not availability_dict[year]:
-                print '{}: insufficient data - skipping!'
-                continue
-            print '- {}:'.format(str(year)),
-            years_dict[year] = self.main(df = self.df.loc[str(year)],
-                                         n_trials = n_trials)
-            print 'Done'
-        return years_dict            
+        for year in years_list:
+            years_dict[year] = self.get_sample_data(df = self.df.loc[str(year)])
+        return years_dict
     #--------------------------------------------------------------------------
 
-    def _cross_sample_QC(self, results_list):
-        
-        n_trials = len(results_list)
-        df = pd.concat(results_list).reset_index(drop = True)
-        d_mode = len(df.loc[df.b1 > 0, 'b1'])
-        e_mode = len(df.loc[df.b1 < 0, 'b1'])
-        if e_mode > d_mode:
-            df = df.loc[df.b1 < 0]
-        else:
-            df = df.loc[df.b1 > 0]
-        return df
-
     #--------------------------------------------------------------------------
-    def main(self, df = None, n_trials = 1):
-        
-        if df is None: df = self.df
-        do_resample = True if n_trials == 1 else False
-        results_list = []
-        print '- bootstrap # ',
-        for trial in xrange(n_trials):
-            print str(trial + 1),
-            seasons_df = self.data_to_seasons(self.get_sample_data(df,
-                                                                   resample = 
-                                                                   do_resample))
-            index_df = pd.DataFrame({'Ta_mean': seasons_df['Ta'].
-                                     groupby(['Season', 'T_class']).mean()})
-            results_df = pd.DataFrame(map(lambda x: self.fit(seasons_df.loc[x]), 
-                                          index_df.index),
-                                          index = index_df.index)
-            results_df = results_df.join(index_df).reset_index(drop = True)
-            results_list.append(results_df)
-        return self._cross_sample_QC(results_list)
-    #--------------------------------------------------------------------------    
-    
-    #--------------------------------------------------------------------------
-    def data_to_seasons(self, df):
+    def get_season_data(self, df):
     
         work_df = df.copy()
     
@@ -150,9 +148,24 @@ class change_point_detect(object):
         seasons_df.reset_index(level = ['Bin'], drop = True, inplace = True)
     
         return seasons_df
-    #------------------------------------------------------------------------------
-
-    #------------------------------------------------------------------------------
+    #--------------------------------------------------------------------------
+    
+    #--------------------------------------------------------------------------
+    def get_season_data_by_year(self):
+        
+        data_dict = self.get_sample_data_by_year()
+        seasons_dict = {}
+        for year in sorted(data_dict.keys()):
+            try:
+                seasons_dict[year] = self.get_season_data(data_dict[year])
+            except AssertionError:
+                print ('Insufficient data for year {}! Excluding...'
+                       .format(str(year)))
+                continue
+        return seasons_dict
+    #--------------------------------------------------------------------------
+        
+    #--------------------------------------------------------------------------
     def fit(self, season_df):
         
         def a_model_statistics(cp):
@@ -215,7 +228,7 @@ class change_point_detect(object):
         # (conditional on passing f score and end points within limits)
         d = {}
         fmax_a, cp_a = f_a_array.max(), int(f_a_array.argmax())
-        if ((cp_a > endpts_threshold) | (cp_a < df_length - endpts_threshold)):
+        if ((cp_a > endpts_threshold) & (cp_a < df_length - endpts_threshold)):
             p_a = self.f_test(fmax_a, df_length, model = 'a')
             if p_a < psig:
                 d['ustar_th_a'] = season_df['ustar'].iloc[cp_a]
@@ -225,40 +238,67 @@ class change_point_detect(object):
     #            d['norm_a2'] = a2 * (ustar_th_a / (a0 + a1 * ustar_th_a))
                           
         fmax_b, cp_b = f_b_array.max(), int(f_b_array.argmax())
-
-        if ((cp_b > endpts_threshold) | (cp_b < df_length - endpts_threshold)):
+        if ((cp_b > endpts_threshold) & (cp_b < df_length - endpts_threshold)):
             p_b = self.f_test(fmax_b, len(season_df), model = 'b')
             if p_b < psig:    
                 d['ustar_th_b'] = season_df['ustar'].iloc[cp_b]
                 d['b0'], d['b1'] = b_model_statistics(cp_b)[1]
     
         return d
-    
-    #------------------------------------------------------------------------------
+    #--------------------------------------------------------------------------
 
-
-
-    def plot_this(self, df):
+    #--------------------------------------------------------------------------
+    def plot_fit(self, df):
         
-        plot_df = df.copy()
+        plot_df = df.copy().reset_index(drop = True)
         stats_df = pd.DataFrame(self.fit(df), index = [0])
-        ustar_b = stats_df.ustar_th_b.iloc[0]
-        cp_b = np.where(df.ustar == ustar_b)[0].item()
-        plot_df['ustar_b'] = ustar_b
-        plot_df['ustar_b'].iloc[:cp_b] = plot_df['ustar'].iloc[:cp_b]
-        plot_df['yHat_b'] = plot_df['ustar_b'] * stats_df.b1.item() + stats_df.b0.item()
-        
-        # Now plot    
+        if stats_df.empty:
+            raise RuntimeError('Could not find a valid changepoint for this '
+                               'sample')
+        zero_list = [np.nan, 0, np.nan]
+        if 'ustar_th_b' in stats_df:
+            zero_list.append(stats_df.b0.item())
+            cp_b = np.where(df.ustar == stats_df.ustar_th_b.item())[0].item()
+            plot_df['yHat_b'] = (stats_df.ustar_th_b.item() * stats_df.b1.item() + 
+                                 stats_df.b0.item())
+            plot_df['yHat_b'].iloc[:cp_b] = (plot_df.ustar.iloc[:cp_b] * 
+                                             stats_df.b1.item() +
+                                             stats_df.b0.item())
+            
+        if 'ustar_th_a' in stats_df:
+            zero_list.append(stats_df.a0.item())
+            cp_a = np.where(df.ustar == stats_df.ustar_th_a.item())[0].item()
+            NEE_at_cp_a = (stats_df.ustar_th_a.item() * stats_df.a1.item() + 
+                           stats_df.a0.item())
+            if 'ustar_th_a' in stats_df:            
+                plot_df['yHat_a'] = (plot_df.ustar * stats_df.a1.item() + 
+                                     stats_df.a0.item())
+                plot_df['yHat_a'].iloc[cp_a + 1:] = ((plot_df.ustar.iloc[cp_a + 1:] -
+                                                      stats_df.ustar_th_a.item()) *
+                                                     stats_df.a2.item() + 
+                                                     NEE_at_cp_a)
+        plot_df.loc[-1] = zero_list
+        plot_df.index = plot_df.index + 1
+        plot_df = plot_df.sort_index()
         fig, ax = plt.subplots(1, 1, figsize = (14, 8))
+        ax.set_xlim([0, plot_df.ustar.max() * 1.05])
+        ax.spines['right'].set_visible(False)
+        ax.spines['top'].set_visible(False)
+        ax.tick_params(axis = 'y', labelsize = 14)
+        ax.tick_params(axis = 'x', labelsize = 14)
         fig.patch.set_facecolor('white')
-#        ax.title('Year: '+str(stats_df.name[0])+', Season: '+str(stats_df.name[1])+', T class: '+str(stats_df.name[2])+'\n',fontsize=22)
-        ax.set_xlabel(r'u* ($m\/s^{-1}$)', fontsize = 16)
-        ax.set_ylabel(r'Fc ($\mu mol C\/m^{-2} s^{-1}$)', fontsize = 16)
+        ax.set_xlabel('$u*\/(m\/s^{-1}$)', fontsize = 16)
+        ax.set_ylabel('$NEE\/(\mu mol C\/m^{-2} s^{-1}$)', fontsize = 16)
+        ax.axhline(0, color = 'black', lw = 0.5)
         ax.plot(plot_df.ustar, plot_df.Fc, 'bo')
-        ax.plot(plot_df.ustar, plot_df.yHat_b, color = 'red')
+        if 'ustar_th_b' in stats_df:
+            ax.plot(plot_df.ustar, plot_df.yHat_b, color = 'red')
+        if 'ustar_th_a' in stats_df:
+            ax.plot(plot_df.ustar, plot_df.yHat_a, color = 'green')
+        return
+    #--------------------------------------------------------------------------
 
-
-#------------------------------------------------------------------------------
+    #--------------------------------------------------------------------------
     def f_test(self, f_max, n, model):
         
         p = np.NaN
@@ -333,43 +373,7 @@ class change_point_detect(object):
             p = PchipInterpolator(f_crit_vals, 
                                   (1 - np.array(cols)).tolist())(f_max)
         return p
-#------------------------------------------------------------------------------
-
-
-
-
-#------------------------------------------------------------------------------
-# Plot identified change points in observed (i.e. not bootstrapped) data and   
-# write to specified folder                                                    
-def plot_fits(temp_df,stats_df,plot_out):
-    
-    # Create series for use in plotting (this could be more easily called from fitting function - why are we separating these?)
-    temp_df['ustar_alt']=temp_df['ustar']
-    temp_df['ustar_alt'].iloc[int(stats_df['bMod_CP'])+1:]=stats_df['bMod_threshold']
-    temp_df['ustar_alt1']=temp_df['ustar']
-    temp_df['ustar_alt1'].iloc[stats_df['aMod_CP']+1:]=temp_df['ustar_alt1'].iloc[stats_df['aMod_CP']]
-    temp_df['ustar_alt2']=((temp_df['ustar']-stats_df['aMod_threshold'])
-                           *np.concatenate([np.zeros(stats_df['aMod_CP']+1),np.ones(50-(stats_df['aMod_CP']+1))]))
-    temp_df['yHat_a']=stats_df['a0']+stats_df['a1']*temp_df['ustar_alt1']+stats_df['a2']*temp_df['ustar_alt2'] # Calculate the estimated time series
-    temp_df['yHat_b']=stats_df['b0']+stats_df['b1']*temp_df['ustar_alt']          
-    
-    # Now plot    
-    fig=plt.figure(figsize=(12,8))
-    fig.patch.set_facecolor('white')
-    plt.plot(temp_df['ustar'],temp_df['Fc'],'bo')
-    plt.plot(temp_df['ustar'],temp_df['yHat_b'],color='red')   
-    plt.plot(temp_df['ustar'],temp_df['yHat_a'],color='green')   
-    plt.title('Year: '+str(stats_df.name[0])+', Season: '+str(stats_df.name[1])+', T class: '+str(stats_df.name[2])+'\n',fontsize=22)
-    plt.xlabel(r'u* ($m\/s^{-1}$)',fontsize=16)
-    plt.ylabel(r'Fc ($\mu mol C\/m^{-2} s^{-1}$)',fontsize=16)
-    plt.axvline(x=stats_df['bMod_threshold'],color='black',linestyle='--')
-    props = dict(boxstyle='round,pad=1', facecolor='white', alpha=0.5)
-    txt='Change point detected at u*='+str(round(stats_df['bMod_threshold'],3))+' (i='+str(stats_df['bMod_CP'])+')'
-    ax=plt.gca()
-    plt.text(0.57,0.1,txt,bbox=props,fontsize=12,verticalalignment='top',transform=ax.transAxes)
-    plot_out_name='Y'+str(stats_df.name[0])+'_S'+str(stats_df.name[1])+'_Tclass'+str(stats_df.name[2])+'.jpg'
-    fig.savefig(os.path.join(plot_out,plot_out_name))
-    plt.close(fig)
+    #--------------------------------------------------------------------------
 
 # Plot PDF of u* values and write to specified folder           
 def plot_hist(S,mu,sig,crit_t,year,plot_out):

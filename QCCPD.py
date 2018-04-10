@@ -75,7 +75,7 @@ class change_point_detect(object):
                                                           n_trials)
         print 'Done'
         output_dict = {'summary_statistics': stats_df}
-        if keep_trial_results: output_dict['trial_results': trials_df]
+        if keep_trial_results: output_dict['trial_results'] = trials_df
         return output_dict
     #--------------------------------------------------------------------------
     
@@ -91,12 +91,17 @@ class change_point_detect(object):
         if not seasons_dict:
             raise RuntimeError('No valid data for analysis!')
         print 'Finding change points for year: '
-        cp_dict = {}
+#        cp_dict = {}
+        cp_list = []
         for year in sorted(seasons_dict.keys()):
             print str(year),
-            cp_dict[year] = self.get_change_point(seasons_dict[year], 
-                                                  n_trials,
-                                                  keep_trial_results)
+            cp_dict = self.get_change_point(seasons_dict[year], 
+                                            n_trials,
+                                            keep_trial_results)
+            cp_dict['summary_statistics']['Year'] = year
+            cp_list.append(cp_dict)
+            
+        pdb.set_trace()
         return cp_dict
     #--------------------------------------------------------------------------
 

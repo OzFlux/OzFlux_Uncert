@@ -28,7 +28,7 @@ class change_point_detect(object):
 #------------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def _cross_sample_QC(self, df, n_trials):
+    def _cross_sample_stats_QC(self, df, n_trials):
         
         d_mode = len(df.loc[df.b1 > 0, 'b1'])
         e_mode = len(df.loc[df.b1 < 0, 'b1'])
@@ -38,11 +38,23 @@ class change_point_detect(object):
             df.loc[df.b1 < 0, ['ustar_th_b', 'b0', 'b1']] = np.nan
         if len(df) < n_trials * 4:
             raise RuntimeError('Valid change points below critical threshold!')
-        return df
+        stats_df = pd.DataFrame({'norm_a1': (df.a1 * (df.ustar_th_a / 
+                                                      (df.a0 + df.a1 * 
+                                                       df.ustar_th_a))).median(),
+                                 'norm_a2': (df.a2 * (df.ustar_th_a / 
+                                                      (df.a0 + df.a1 * 
+                                                       df.ustar_th_a))).median(),
+                                 'ustar_mean': df.ustar_th_b.mean(),
+                                 'ustar_2sig': (df.ustar_th_b.std() * 
+                                                stats.t.isf(0.025, n_trials)),
+                                 'ustar_n': df.ustar_th_b.count()},
+                                index = [0])
+        df = df[['b0', 'b1', 'ustar_th_b']].dropna()
+        return df, stats_df
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def get_change_point(self, df, n_trials = 1):
+    def get_change_point(self, df, n_trials = 1, keep_trial_results = False):
         
         print '- bootstrap #',
         results_list = []
@@ -56,14 +68,20 @@ class change_point_detect(object):
                                       index = index_df.index)
             results_df = results_df.join(index_df)
             results_list.append(results_df)
+        print 'Done!'
+        print 'Running cross-sample QC...'
+        all_results_df = pd.concat(results_list).reset_index(drop = True)
+        trials_df, stats_df = self._cross_sample_stats_QC(all_results_df,
+                                                          n_trials)
         print 'Done'
-        return self._cross_sample_QC(pd.concat(results_list).
-                                   reset_index(drop = True),
-                                   n_trials)
+        output_dict = {'summary_statistics': stats_df}
+        if keep_trial_results: output_dict['trial_results': trials_df]
+        return output_dict
     #--------------------------------------------------------------------------
     
     #--------------------------------------------------------------------------
-    def get_change_point_by_year(self, n_trials):
+    def get_change_point_by_year(self, n_trials = 1, 
+                                 keep_trial_results = False):
 
         if not self.resample:
             print ('Multiple trials without resampling are redundant! Setting '
@@ -76,7 +94,9 @@ class change_point_detect(object):
         cp_dict = {}
         for year in sorted(seasons_dict.keys()):
             print str(year),
-            cp_dict[year] = self.get_change_point(seasons_dict[year], n_trials)
+            cp_dict[year] = self.get_change_point(seasons_dict[year], 
+                                                  n_trials,
+                                                  keep_trial_results)
         return cp_dict
     #--------------------------------------------------------------------------
 
@@ -233,9 +253,6 @@ class change_point_detect(object):
             if p_a < psig:
                 d['ustar_th_a'] = season_df['ustar'].iloc[cp_a]
                 d['a0'], d['a1'], d['a2'] = a_model_statistics(cp_a)[1] 
-    
-    #            d['norm_a1'] = a1 * (ustar_th_a / (a0 + a1 * ustar_th_a))
-    #            d['norm_a2'] = a2 * (ustar_th_a / (a0 + a1 * ustar_th_a))
                           
         fmax_b, cp_b = f_b_array.max(), int(f_b_array.argmax())
         if ((cp_b > endpts_threshold) & (cp_b < df_length - endpts_threshold)):
@@ -418,29 +435,4 @@ def plot_slopes(df,plot_out):
     fig.savefig(os.path.join(plot_out,plot_out_name))
     plt.close(fig)
 
-#------------------------------------------------------------------------------
-
-#------------------------------------------------------------------------------
-# Quality control across bootstraps
-def QC2(df,output_df,bootstrap_n):
-    
-    # Get the median values of the normalised slope parameters for each year
-    output_df['norm_a1_median']=df['norm_a1'][df['a_valid']==True].groupby(df[df['a_valid']==True].index).median()
-    output_df['norm_a2_median']=df['norm_a2'][df['a_valid']==True].groupby(df[df['a_valid']==True].index).median()
-    
-    # Get the proportion of all available cases that passed QC for b model   
-    output_df['QCpass']=df['bMod_threshold'][df['b_valid']==True].groupby(df[df['b_valid']==True].index).count()
-    output_df['QCpass_prop']=output_df['QCpass']/output_df['Total']
-    
-    # Identify years where either diagnostic or operational model did not find enough good data for robust estimate
-    output_df['a_valid']=(~(np.isnan(output_df['norm_a1_median']))&(~np.isnan(output_df['norm_a2_median'])))
-    output_df['b_valid']=(output_df['QCpass']>(4*bootstrap_n))&(output_df['QCpass_prop']>0.2)
-    for i in output_df.index:
-        if output_df['a_valid'].loc[i]==False: 
-            print 'Insufficient valid cases for robust diagnostic (a model) u* determination in year '+str(i)
-        if output_df['b_valid'].loc[i]==False: 
-            print 'Insufficient valid cases for robust operational (b model) u* determination in year '+str(i)
- 
-    return output_df    
-    
 #------------------------------------------------------------------------------

@@ -1,244 +1,329 @@
+#!/usr/bin/env python2
 # -*- coding: utf-8 -*-
-import os
-import copy
-import math
+"""
+Created on Thu Jan 25 12:29:02 2018
+
+@author: ian
+"""
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy import stats
-import matplotlib.pyplot as plt
-import matplotlib.mlab as mlab
-import pdb
+from statsmodels.formula.api import ols
 
-#-----------------------------------------------------------------------------#
+import utils
 
-def calculate_random_error(df,configs):
-#"""
-## Pass the following arguments: 1) df containing non-gap filled QC'd Fc, Fsd, Ta, ws
-#                                2) config file (dictionary) containing options as 
-#                                   specified below
-#
-## Returns the linear regression statistics for daytime and nocturnal data
-#
-## Dictionary should contain the following:
-#    'results_out_path' (path for results to be written to)
-#    'flux_freq' (frequency of flux data)
-#    'averaging_bins' (for calculation of random error variance as function of flux magnitude)    
-#    'radiation_difference_threshold' (the maximum allowable Fsd difference between Fc pairs;
-#                                      see below for threshold values)
-#    'temperature_difference_threshold' (as above)
-#    'windspeed_difference_threshold' (as above)
-#                                 
-## Algorithm from reference:
-#    Hollinger, D.Y., Richardson, A.D., 2005. Uncertainty in eddy covariance measurements 
-#    and its application to physiological models. Tree Physiol. 25, 873–885.
-#
-## Uses daily differencing procedure to estimate random error (note this will overestimate by factor of up to 2)
-#
-## Fc pairs must pass difference constraints as follows (as suggested in ref above):
-#    Fsd:35W m^-2
-#    Ta: 3C
-#    ws: 1m s^-1
-#"""	
-    print '\n------------------------'
-    print 'Calculating random error'
-    print '------------------------\n'
-	
-    # Unpack the constraints etc
-    Ta_threshold=int(configs['options']['temperature_difference_threshold'])
-    ws_threshold=int(configs['options']['windspeed_difference_threshold'])
-    rad_threshold=int(configs['options']['radiation_difference_threshold'])
-    num_classes=int(configs['options']['averaging_bins'])
-    num_trials=int(configs['options']['num_trials'])
-    propagate_error=configs['options']['propagate_error']=='True'
-    noct_threshold=int(configs['options']['noct_threshold'])
-    records_per_day=1440/int(configs['options']['flux_frequency'])
-    results_out_path=configs['files']['results_out_path']
-    Fc=configs['variables']['Fc']
-    Fsd=configs['variables']['Fsd']    
-    Ta=configs['variables']['Ta']
-    ws=configs['variables']['ws']
+#------------------------------------------------------------------------------
+# Class init
+#------------------------------------------------------------------------------
+class random_error(object):
     
-    # Do the paired difference analysis (drop all cases containing any NaN)
-    diff_df=pd.DataFrame({'Fc_mean':(df[Fc]+df[Fc].shift(records_per_day))/2,
-                          'Fc_diff':df[Fc]-df[Fc].shift(records_per_day),
-        			  'Ta_diff':abs(df[Ta]-df[Ta].shift(records_per_day)),
-        			  'ws_diff':abs(df[ws]-df[ws].shift(records_per_day)),
-        			  'Fsd_diff':abs(df[Fsd]-df[Fsd].shift(records_per_day)),
-                          'Day_ind':(df[Fsd]+df[Fsd].shift(records_per_day))/2 > noct_threshold}).reset_index()
-    diff_df.dropna(axis=0,how='any',inplace=True)
+    """ 
+    Random error class
     
-    # Find number of passed tuples, report, then drop everything except mean and difference of Fc tuples
-    diff_df['pass_constraints']=(diff_df['Ta_diff']<Ta_threshold)&(diff_df['ws_diff']<ws_threshold)&(diff_df['Fsd_diff']<rad_threshold)
-    total_tuples=len(diff_df)
-    passed_tuples=len(diff_df[diff_df['pass_constraints']])	
-    print (str(passed_tuples)+' of '+str(total_tuples)+' available tuples passed difference constraints (Fsd='+
-  	     str(rad_threshold)+'Wm^-2, Ta='+str(Ta_threshold)+'C, ws='+str(ws_threshold)+'ms^-1)\n')
-    diff_df=diff_df[['Fc_mean','Fc_diff','Day_ind']][diff_df['pass_constraints']]
-    diff_df['Class']=np.nan    
+    Args:
+        * dataframe (pandas dataframe): with columns containing required data
+          (minimum of: turbulent flux, temperature, wind speed, insolation)
     
-    # Calculate and report n for each bin
-    n_per_class=int(len(diff_df)/num_classes)
-    print 'Number of observations per bin = '+str(n_per_class)
+    Kwargs:
+        * names_dict (dict): a dictionary containing the required 
+          configuration items (default uses OzFluxQC nomenclature and is 
+          compatible with a standard L5 dataset)
+          (random_error.get_configs_dict())
+        * num_bins (int): number of bins to use for the averaging of the errors
+        * noct_threshold (int or float): the threshold (in Wm-2 insolation) below which
+          the onset of night occurs
+        * t_threshold (int or float): the difference threshold for temperature
+        * ws_threshold (int or float): the difference threshold for wind_speed
+        * k_threshold (int or float): the difference threshold for insolation
+    """
     
-    # Calculate and report nocturnal and daytime share of data
-    day_classes=int(len(diff_df[diff_df['Day_ind']])/float(len(diff_df))*num_classes)
-    noct_classes=num_classes-day_classes
-    print 'Total bins = '+str(num_classes)+'; day bins = '+str(day_classes)+'; nocturnal bins = '+str(noct_classes)
-    
-    # Cut into desired number of quantiles and get the flux and flux error means for each category
-    diff_df['Class'][diff_df['Day_ind']]=pd.qcut(diff_df['Fc_mean'][diff_df['Day_ind']],day_classes).labels
-    diff_df['Class'][~diff_df['Day_ind']]=pd.qcut(diff_df['Fc_mean'][~diff_df['Day_ind']],noct_classes).labels+day_classes
-    diff_df.index=diff_df['Class'].astype('int64')
-    cats_df=pd.DataFrame({'Fc_mean':diff_df['Fc_mean'].groupby(diff_df['Class']).mean()})
-    cats_df['sig_del']=np.nan
-    cats_df['Day_ind']=np.nan
-    cats_df['Day_ind'].ix[:day_classes]=True
-    cats_df['Day_ind'].ix[day_classes:]=False
-    for i in cats_df.index:
-        i=int(i)
-        cats_df['sig_del'].ix[i]=(abs(diff_df['Fc_diff'].ix[i]-diff_df['Fc_diff'].ix[i].mean())).mean()*np.sqrt(2)
-    
-    # Remove daytime positive bin averages and nocturnal negative bin averages
-    cats_df['exclude']=((cats_df.Fc_mean>0)&(cats_df.Day_ind))|((cats_df.Fc_mean<0)&(cats_df.Day_ind==False))
-    cats_df=cats_df[['Fc_mean','sig_del','Day_ind']][~cats_df.exclude]
-    
-    # Calculate linear fit for day and night values...
-    linreg_stats_df=pd.DataFrame(columns=['slope','intcpt','r_val','p_val','SE'],index=['day','noct'])
-    linreg_stats_df.ix['day']=stats.linregress(cats_df['Fc_mean'][cats_df['Day_ind']],cats_df['sig_del'][cats_df['Day_ind']])
-    linreg_stats_df.ix['noct']=stats.linregress(cats_df['Fc_mean'][cats_df['Day_ind']==False],cats_df['sig_del'][cats_df['Day_ind']==False])
-    
-    print '\nRegression results (also saved at '+results_out_path+'):'
-    print linreg_stats_df    
-    
-    # Output results
-    linreg_stats_df.to_csv(os.path.join(results_out_path,'random_error_stats.csv'))
-    
-    # Output plots
-    print '\nPlotting: 1) PDF of random error'
-    print '          2) sigma_delta (variance of random error) as a function of flux magnitude'
-    fig=main_plot(diff_df['Fc_diff'],cats_df,linreg_stats_df,num_classes)
-    fig.savefig(os.path.join(results_out_path,'Random_error_plots.jpg'))
+    def __init__(self, dataframe, names_dict = False, num_bins = 50,
+                 noct_threshold = 10, scaling_coefficient = 1,
+                 t_threshold = 3, ws_threshold = 1, k_threshold = 35):
+        
+        if not names_dict: 
+            self.external_names = self._define_default_external_names()
+        else:
+            self.external_names = names_dict
+        self.internal_names = self._define_default_internal_names()
+        self.df = utils.rename_df(dataframe, self.external_names, 
+                                  self.internal_names)
+        self._QC()
+        self.num_bins = num_bins
+        self.noct_threshold = noct_threshold
+        self.scaling_coefficient = scaling_coefficient
+        self.t_threshold = t_threshold
+        self.ws_threshold = ws_threshold
+        self.k_threshold = k_threshold
+        self.binned_error = self.get_flux_binned_sigma_delta()
+#------------------------------------------------------------------------------
 
-    # Return data
-    if propagate_error:
-        uncert_df=propagate_random_error(df,linreg_stats_df,configs)        
-        return linreg_stats_df,uncert_df    
-    else:
-        return linreg_stats_df
+#------------------------------------------------------------------------------
+# Class methods
+#------------------------------------------------------------------------------
+        
+    #--------------------------------------------------------------------------
+    def _QC(self):
+        
+        interval = int(filter(lambda x: x.isdigit(), 
+                              pd.infer_freq(self.df.index)))
+        assert interval % 30 == 0
+        recs_per_day = 1440 / interval
+        self.recs_per_day = recs_per_day
 
-# What?
-def propagate_random_error(df,stats_df,configs):
-    
-    # Unpack the constraints etc
-    num_trials=int(configs['options']['num_trials'])
-    results_out_path=configs['files']['results_out_path']
-    Fc=configs['variables']['Fc']
-    flux_frequency=int(configs['options']['flux_frequency'])
-    
-    # Create df for propagation of error (drop nans)
-    prop_df=pd.DataFrame({'Fc':df[Fc]})
-    prop_df['sig_del']=np.where(prop_df[Fc]>=0,
-                               (prop_df[Fc]*stats_df.ix['noct'][0]+stats_df.ix['noct'][1])/np.sqrt(2),
-			             (prop_df[Fc]*stats_df.ix['day'][0]+stats_df.ix['day'][1])/np.sqrt(2))
-    prop_df.dropna(inplace=True)
-      
-    # Calculate critical t
-    crit_t=stats.t.isf(0.025,num_trials) #Calculate critical t-value for p=0.095
-                
-    # Calculate uncertainty due to random error for all measured data at annual time step
-    years_df=pd.DataFrame({'Valid_n':prop_df['Fc'].groupby([lambda x: x.year]).count()})
-    years_df['Random error (Fc)']=np.nan
-    for i in years_df.index:
-        temp_arr=np.array([np.random.laplace(0,prop_df['sig_del'].ix[str(i)]).sum() for j in xrange(num_trials)])
-        years_df['Random error (Fc)'].ix[i]=temp_arr.std()*crit_t*12*10**-6*flux_frequency*60
-    
-    # Output data
-    print '\nAnnual uncertainty in gC m-2 (also saved at '+results_out_path+'):'
-    print years_df
-    years_df.to_csv(os.path.join(results_out_path,'annual_uncertainty.csv'))
-    prop_df['sig_del'].to_csv(os.path.join(results_out_path,'timestep_uncertainty.csv'))
-   
-    # Return data
-    return prop_df
-#-----------------------------------------------------------------------------#
+        return
+    #--------------------------------------------------------------------------
 
-# Plotting
-#-----------------------------------------------------------------------------#
-def myround(x,base=10):
-    return int(base*round(x/base))
+    #--------------------------------------------------------------------------
+    def _define_default_external_names(self):
+              
+        return {'flux_name': 'Fc',
+                'mean_flux_name': 'Fc_SOLO',
+                'windspeed_name': 'Ws',
+                'temperature_name': 'Ta',
+                'insolation_name': 'Fsd'}
+    #--------------------------------------------------------------------------
 
-# Histogram to check error distribution is approximately Laplacian
-def hist_plot(Fc_diff,ax):
-	
-    # Calculate scaling parameter for Laplace distribution over entire dataset (sigma / sqrt(2))
-    beta=(abs(Fc_diff-Fc_diff.mean())).mean()
-    
-    # Calculate scaling parameter for Gaussian distribution over entire dataset (sigma)
-    sig=Fc_diff.std()
+    #--------------------------------------------------------------------------
+    def _define_default_internal_names(self):
 
-    # Get edge quantiles and range, then calculate Laplace pdf over range
-    x_low=myround(Fc_diff.quantile(0.005))
-    x_high=myround(Fc_diff.quantile(0.995))
-    x_range=(x_high-x_low)
-    x=np.arange(x_low,x_high,1/(x_range*10.))
-    pdf_laplace=np.exp(-abs(x/beta))/(2.*beta)
-	    	
-    # Plot normalised histogram with Laplacian and Gaussian pdfs
-    ax.hist(np.array(Fc_diff),bins=300,range=[x_low,x_high],normed=True,color='blue',edgecolor='none')
-    ax.plot(x,pdf_laplace,color='red',linewidth=2.5,label='Laplacian PDF')
-    ax.plot(x,mlab.normpdf(x,0,sig),color='green',linewidth=2.5,label='Gaussian PDF')
-    ax.set_xlabel(r'$\delta\/(\mu mol\/m^{-2} s^{-1}$)',fontsize=16)
-    ax.legend(loc='upper left')
-    ax.set_title('Random error distribution \n')
+        return {'flux_name': 'flux',
+                'mean_flux_name': 'flux_mean',
+                'windspeed_name': 'Ws',
+                'temperature_name': 'Ta',
+                'insolation_name': 'Fsd'}
+    #--------------------------------------------------------------------------
 
-# Linear regression plot - random error variance as function of flux magnitude (binned by user-set quantiles)
-def linear_plot(cats_df,linreg_stats_df,num_classes,ax):
-    
-    # Create series for regression lines
-    influx_x=cats_df['Fc_mean'][cats_df['Fc_mean']<=0]
-    influx_y=np.polyval([linreg_stats_df.ix['day'][0],linreg_stats_df.ix['day'][1]],influx_x)
-    efflux_x=cats_df['Fc_mean'][cats_df['Fc_mean']>=0]
-    efflux_y=np.polyval([linreg_stats_df.ix['noct'][0],linreg_stats_df.ix['noct'][1]],efflux_x)
-    
-    # Do plotting
-    ax.plot(cats_df['Fc_mean'],cats_df['sig_del'],'ro')
-    ax.plot(influx_x,influx_y,color='blue')
-    ax.plot(efflux_x,efflux_y,color='blue')
-    ax.set_xlim(round(cats_df['Fc_mean'].iloc[0])-1,math.ceil(cats_df['Fc_mean'].iloc[-1])+1)
-    ax.set_xlabel(r'$C\/flux\/(\mu mol\/m^{-2} s^{-1}$)',fontsize=16)
-    ax.set_title('Random error SD binned over flux magnitude quantiles (n='+str(num_classes)+')\n')
-    
-    # Move axis and relabel
-    str_influx=('a='+str(round(linreg_stats_df.ix['day'][0],2))+
-                '\nb='+str(round(linreg_stats_df.ix['day'][1],2))+
-                '\nr$^2$='+str(round(linreg_stats_df.ix['day'][2],2))+
-                '\np='+str(round(linreg_stats_df.ix['day'][3],2))+
-                '\nSE='+str(round(linreg_stats_df.ix['day'][4],2)))
-    str_efflux=('a='+str(round(linreg_stats_df.ix['noct'][0],2))+
-                '\nb='+str(round(linreg_stats_df.ix['noct'][1],2))+
-                '\nr$^2$='+str(round(linreg_stats_df.ix['noct'][2],2))+
-                '\np='+str(round(linreg_stats_df.ix['noct'][3],2))+
-                '\nSE='+str(round(linreg_stats_df.ix['noct'][4],2)))
-    props = dict(boxstyle='round', facecolor='white', alpha=0.5)
-    ax.text(0.05, 0.35, str_influx, transform=ax.transAxes, fontsize=12,
-            verticalalignment='top',bbox=props)
-    ax.text(0.85, 0.35, str_efflux, transform=ax.transAxes, fontsize=12,
-            verticalalignment='top',bbox=props)        
-    ax.set_ylabel('$\sigma(\delta)$',fontsize=18)
-    ax.xaxis.set_ticks_position('bottom')
-    ax.yaxis.set_ticklabels([])
-    ax2=ax.twinx()
-    ax2.spines['right'].set_visible(True)
-    ax2.spines['right'].set_position('zero')
-    ax2.set_ylim(0,4.5)
-	
-# Create two plot axes
-def main_plot(Fc_diff,cats_df,linreg_stats_df,num_classes):
+    #--------------------------------------------------------------------------
+    def get_flux_binned_sigma_delta(self):    
 
-    fig, (ax1, ax2) = plt.subplots(nrows=2)
-    fig.patch.set_facecolor('white')
-    hist_plot(Fc_diff, ax1)
-    linear_plot(cats_df,linreg_stats_df,num_classes,ax2)
-    fig.tight_layout()
-    return fig
-#-----------------------------------------------------------------------------#
+        """
+        Calculate the daily differences and bin average as a function of 
+        flux magnitude
+        
+        Returns:
+            * Dictionary containing keys of 'night' and 'day', each of which
+              contains a pandas dataframe with estimates of binned mean flux
+              and corresponding sigma_delta estimate.
+        """
+        
+        #----------------------------------------------------------------------
+        # Bin day and night data
+        def bin_time_series():
+            
+            def get_sigmas(df):
+                def calc(s):
+                    return abs(s - s.mean()).mean() * np.sqrt(2)
+                return pd.DataFrame({'sigma_delta': 
+                                      map(lambda x: 
+                                          calc(df.loc[df['quantile_label'] == x, 
+                                                      'flux_diff']), 
+                                          df['quantile_label'].unique()
+                                          .categories),
+                                     'mean': 
+                                      map(lambda x: 
+                                          df.loc[df['quantile_label'] == x,
+                                                 'flux_mean'].mean(),
+                                          df['quantile_label'].unique()
+                                          .categories)})
+
+            noct_df = filter_df.loc[filter_df.Fsd_mean < self.noct_threshold, 
+                                    ['flux_mean', 'flux_diff']]
+            day_df = filter_df.loc[filter_df.Fsd_mean > self.noct_threshold, 
+                                   ['flux_mean', 'flux_diff']]
+                    
+            nocturnal_propn = float(len(noct_df)) / len(filter_df)
+            num_cats_night = int(round(self.num_bins * nocturnal_propn))
+            num_cats_day = self.num_bins - num_cats_night
+            
+            noct_df['quantile_label'] = pd.qcut(noct_df.flux_mean, num_cats_night, 
+                                                labels = np.arange(num_cats_night))
+            noct_group_df = get_sigmas(noct_df)
+    
+            day_df['quantile_label'] = pd.qcut(day_df.flux_mean, num_cats_day, 
+                                               labels = np.arange(num_cats_day))
+            day_group_df = get_sigmas(day_df)
+
+            return day_group_df, noct_group_df
+        #----------------------------------------------------------------------
+
+        #----------------------------------------------------------------------    
+        def difference_time_series():
+            diff_df = pd.DataFrame(index = self.df.index)
+            for var in ['flux', 'Ta', 'Fsd', 'Ws']:
+                var_name = var + '_diff'
+                temp = self.df[var] - self.df[var].shift(self.recs_per_day) 
+                diff_df[var_name] = temp if var == 'flux' else abs(temp)
+            diff_df['flux_mean'] = (self.df['flux_mean'] + self.df['flux_mean']
+                                    .shift(self.recs_per_day)) / 2
+            diff_df['Fsd_mean'] = (self.df['Fsd'] + 
+                                   self.df['Fsd'].shift(self.recs_per_day)) / 2
+            return diff_df
+        #----------------------------------------------------------------------
+        
+        #----------------------------------------------------------------------
+        def filter_time_series():
+            bool_s = ((diff_df['Ws_diff'] < self.ws_threshold) & 
+                      (diff_df['Ta_diff'] < self.t_threshold) & 
+                      (diff_df['Fsd_diff'] < self.k_threshold))
+            return pd.DataFrame({var: diff_df[var][bool_s] for var in 
+                                 ['flux_diff', 'flux_mean', 
+                                  'Fsd_mean']}).dropna()
+        #----------------------------------------------------------------------
+        
+        #----------------------------------------------------------------------
+        # Main routine
+        #----------------------------------------------------------------------
+
+        diff_df = difference_time_series()
+        filter_df = filter_time_series()
+        day_df, noct_df = bin_time_series()
+        return {'day': day_df, 'night': noct_df}
+    
+    #-------------------------------------------------------------------------- 
+    
+    #--------------------------------------------------------------------------
+    def estimate_random_error(self):
+        
+        """ Generate single realisation of random error for time series """
+        
+        sigma_delta_series = self.estimate_sigma_delta()
+        return pd.Series(np.random.laplace(0, sigma_delta_series / np.sqrt(2)),
+                         index = sigma_delta_series.index)
+    #--------------------------------------------------------------------------
+
+    #--------------------------------------------------------------------------
+    def estimate_sigma_delta(self):
+        
+        """Calculates sigma_delta value for each member of a time series"""
+        
+        work_df = self.df.copy()
+        stats_dict = self.get_regression_statistics()
+        work_df.loc[np.isnan(work_df.flux), 'flux_mean'] = np.nan
+        work_df['sigma_delta'] = np.nan
+        night_stats = stats_dict['night']['stats']
+        work_df.loc[work_df.Fsd < self.noct_threshold, 'sigma_delta'] = (
+            work_df.flux_mean * night_stats.slope + night_stats.intercept)
+        day_stats = stats_dict['day']['stats']
+        work_df.loc[work_df.Fsd > self.noct_threshold, 'sigma_delta'] = (
+            work_df.flux_mean * day_stats.slope + day_stats.intercept)
+        if any(work_df['sigma_delta'] < 0):
+            n_below = len(work_df['sigma_delta'][work_df['sigma_delta'] < 0])
+            print ('Warning: approximately {0} estimates of sigma_delta have '
+                   'value less than 0 - setting to mean of all other values'
+                   .format(str(n_below)))
+            work_df.loc[work_df['sigma_delta'] < 0, 'sigma_delta'] = (
+                work_df['sigma_delta']).mean()
+        return work_df['sigma_delta']
+    #--------------------------------------------------------------------------
+
+    #--------------------------------------------------------------------------
+    # Calculate basic regression statistics
+    def get_regression_statistics(self):
+        
+        regression_dict = {}
+        data_dict = self.get_flux_binned_sigma_delta()
+        for state in data_dict:
+            df = data_dict[state].copy()
+            regression = ols("data ~ x", data = dict(data = df['sigma_delta'], 
+                                                     x = df['mean'])).fit()
+            df = df.join(regression.outlier_test())
+            outlier_list = df.loc[df['bonf(p)'] < 0.5].index.tolist()
+            df = df.loc[df['bonf(p)'] > 0.5]
+            statistics = stats.linregress(df['mean'], df['sigma_delta'])
+            regression_dict[state] = {'stats': statistics}
+            if not len(outlier_list) == 0: 
+                regression_dict[state]['outliers'] = outlier_list
+        return regression_dict
+    #--------------------------------------------------------------------------
+
+    #--------------------------------------------------------------------------
+    def plot_data(self, flux_units = '\mu mol\/CO_2\/m^{-2}\/s^{-1}'):
+        
+        data_dict = self.binned_error
+        stats_dict = self.get_regression_statistics()
+        
+        colour_dict = {'day': 'C1', 'night': 'C0'}
+        
+        x_min = min(map(lambda x: data_dict[x]['mean'].min(), 
+                        data_dict.keys()))
+        x_max = max(map(lambda x: data_dict[x]['mean'].max(), 
+                        data_dict.keys()))
+        y_max = max(map(lambda x: data_dict[x]['sigma_delta'].max(), 
+                        data_dict.keys()))
+        
+        fig, ax1 = plt.subplots(1, 1, figsize = (14, 8))
+        fig.patch.set_facecolor('white')
+        ax1.xaxis.set_ticks_position('bottom')
+        ax1.set_xlim([round(x_min * 1.05), round(x_max * 1.05)])
+        ax1.set_ylim([0, round(y_max * 1.05)])
+        ax1.yaxis.set_ticks_position('left')
+        ax1.spines['right'].set_visible(False)
+        ax1.spines['top'].set_visible(False)
+        ax1.tick_params(axis = 'y', labelsize = 14)
+        ax1.tick_params(axis = 'x', labelsize = 14)
+        ax1.set_xlabel('$flux\/({})$'.format(flux_units), fontsize = 18)
+        ax1.set_ylabel('$\sigma[\delta]\/({})$'.format(flux_units), 
+                       fontsize = 18)
+        ax2 = ax1.twinx()
+        ax2.spines['right'].set_position('zero')
+        ax2.spines['left'].set_visible(False)
+        ax2.spines['top'].set_visible(False)
+        ax2.set_ylim(ax1.get_ylim())
+        ax2.tick_params(axis = 'y', labelsize = 14)
+        plt.setp(ax2.get_yticklabels()[0], visible = False)
+        outlier_df_list = []
+        for state in data_dict.keys():
+            stats = stats_dict[state]['stats']
+            df = data_dict[state]
+            if 'outliers' in stats_dict[state]:
+                outlier_df_list.append(df.loc[stats_dict[state]['outliers']])
+            x = np.linspace(df['mean'].min(), df['mean'].max(), 2)
+            y = x * stats.slope + stats.intercept
+            text_str = ('${0}: a = {1}, b = {2}, r^2 = {3}$'
+                        .format(state[0].upper() + state[1:],
+                        str(round(stats.slope, 2)),
+                        str(round(stats.intercept, 2)),
+                        str(round(stats.rvalue ** 2, 2))))
+            ax1.plot(df['mean'], df['sigma_delta'], 'o', 
+                     mfc = colour_dict[state], mec = 'black', label = text_str)
+            ax1.plot(x, y, color = colour_dict[state])
+        try:
+            outlier_df = pd.concat(outlier_df_list)
+            ax1.plot(outlier_df['mean'], outlier_df['sigma_delta'], 's', 
+                     mfc = 'None', mec = 'black', ms = 15, 
+                     label = '$Outlier\/(excluded)$')
+        except ValueError:
+            pass
+        ax1.legend(loc = [0.05, 0.1], fontsize = 14)
+        return fig
+    #--------------------------------------------------------------------------
+
+    #--------------------------------------------------------------------------
+    def propagate_random_error(self, n_trials):
+        
+        """ Run Monte Carlo-style trials to assess uncertainty due to 
+        random error over entire dataset
+        
+        Args:
+            * n_trials (int):  number of trials over which to compound the sum.
+            * scaling_coefficient (int or float): scales summed value to required \
+            units.
+        
+        Returns:
+            * float: scaled estimate of 2-sigma bounds of all random error\
+            trial sums.
+        """
+        
+        sigma_delta_series = self.estimate_sigma_delta()
+        crit_t = stats.t.isf(0.025, n_trials)  
+        results_list = []
+        for this_trial in xrange(n_trials):
+            results_list.append(pd.Series(np.random.laplace(0, 
+                                                            sigma_delta_series / 
+                                                            np.sqrt(2))).sum() *
+                                self.scaling_coefficient)
+        return round(float(pd.DataFrame(results_list).std() * crit_t), 2)
+    #--------------------------------------------------------------------------

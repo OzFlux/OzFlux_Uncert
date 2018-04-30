@@ -47,149 +47,12 @@ class change_point_detect(object):
                                  'ustar_mean': df.ustar_th_b.mean(),
                                  'ustar_2sig': (df.ustar_th_b.std() * 
                                                 stats.t.isf(0.025, n_trials)),
-                                 'ustar_n': df.ustar_th_b.count()},
+                                 'ustar_valid_n': df.ustar_th_b.count()},
                                 index = [0])
         df = df[['b0', 'b1', 'ustar_th_b']].dropna()
         return df, stats_df
     #--------------------------------------------------------------------------
 
-    #--------------------------------------------------------------------------
-    def get_change_point(self, df, n_trials = 1, keep_trial_results = False):
-        
-        print '- bootstrap #',
-        results_list = []
-        for trial in xrange(n_trials):
-            print str(trial + 1),
-            index_df = pd.DataFrame({'Ta_mean': df['Ta'].
-                                     groupby(['Season', 
-                                              'T_class']).mean()})
-            results_df = pd.DataFrame(map(lambda x: self.fit(df.loc[x]), 
-                                          index_df.index),
-                                      index = index_df.index)
-            results_df = results_df.join(index_df)
-            results_list.append(results_df)
-        print 'Done!'
-        print 'Running cross-sample QC...'
-        all_results_df = pd.concat(results_list).reset_index(drop = True)
-        trials_df, stats_df = self._cross_sample_stats_QC(all_results_df,
-                                                          n_trials)
-        print 'Done'
-        output_dict = {'summary_statistics': stats_df}
-        if keep_trial_results: output_dict['trial_results'] = trials_df
-        return output_dict
-    #--------------------------------------------------------------------------
-    
-    #--------------------------------------------------------------------------
-    def get_change_point_by_year(self, n_trials = 1, 
-                                 keep_trial_results = False):
-
-        if not self.resample:
-            print ('Multiple trials without resampling are redundant! Setting '
-                   'n_trials to 1...')
-            n_trials = 1        
-        seasons_dict = self.get_season_data_by_year()
-        if not seasons_dict:
-            raise RuntimeError('No valid data for analysis!')
-        print 'Finding change points for year: '
-#        cp_dict = {}
-        cp_list = []
-        for year in sorted(seasons_dict.keys()):
-            print str(year),
-            cp_dict = self.get_change_point(seasons_dict[year], 
-                                            n_trials,
-                                            keep_trial_results)
-            cp_dict['summary_statistics']['Year'] = year
-            cp_list.append(cp_dict)
-            
-        pdb.set_trace()
-        return cp_dict
-    #--------------------------------------------------------------------------
-
-    #--------------------------------------------------------------------------
-    def get_sample_data(self, df):
-        
-        temp_df = df.loc[df['Fsd'] < 10, ['Fc', 'ustar', 'Ta']].dropna()
-        if not self.resample:
-            return temp_df
-        else:
-            return temp_df.iloc[sorted(np.random.randint(0, 
-                                                         len(temp_df) - 1, 
-                                                         len(temp_df)))]
-    #--------------------------------------------------------------------------
-       
-    #--------------------------------------------------------------------------
-    def get_sample_data_by_year(self):
-        
-        years_list = sorted(list(set(self.df.index.year)))
-        years_dict = {}
-        for year in years_list:
-            years_dict[year] = self.get_sample_data(df = self.df.loc[str(year)])
-        return years_dict
-    #--------------------------------------------------------------------------
-
-    #--------------------------------------------------------------------------
-    def get_season_data(self, df):
-    
-        work_df = df.copy()
-    
-        # Extract overlapping series to individual dataframes, for each of 
-        # which: # 1) sort by temperature; 2) create temperature class; 
-        # 3) sort temperature class by u*; 4) add bin numbers to each class, 
-        # then; 5) concatenate
-        lst = []
-        n_seasons = len(work_df) / (self.season_n / 2) - 1
-        assert n_seasons > 0
-        T_array = np.concatenate(map(lambda x: np.tile(x, self.season_n / 4), 
-                                     range(4)))
-        bin_array = np.tile(np.concatenate(map(lambda x: np.tile(x, self.bin_n), 
-                                               range(50))), 4)
-        for season in xrange(n_seasons):
-            start_ind = season * (self.season_n / 2)
-            end_ind = season * (self.season_n / 2) + self.season_n
-            this_df = work_df.iloc[start_ind: end_ind].copy()
-            this_df.sort_values('Ta', axis = 0, inplace = True)
-            this_df['Season'] = season + 1
-            this_df['T_class'] = T_array
-            this_df = pd.concat(map(lambda x: 
-                                    this_df.loc[this_df.T_class == x]
-                                    .sort_values('ustar', axis = 0), 
-                                    range(4)))
-            this_df['Bin'] = bin_array
-            lst.append(this_df)
-        seasons_df = pd.concat(lst)
-    
-        # Construct multiindex and use Season, T_class and Bin as levels,
-        # drop them as df variables then average by bin and drop it from the 
-        # index
-        arrays = [seasons_df.Season.values, seasons_df.T_class.values, 
-                  seasons_df.Bin.values]
-        name_list = ['Season', 'T_class', 'Bin']
-        tuples = list(zip(*arrays))
-        hierarchical_index = pd.MultiIndex.from_tuples(tuples, 
-                                                       names = name_list)
-        seasons_df.index = hierarchical_index
-        seasons_df.drop(name_list, axis = 1, inplace = True)
-        seasons_df = seasons_df.groupby(level = name_list).mean()
-        seasons_df.reset_index(level = ['Bin'], drop = True, inplace = True)
-    
-        return seasons_df
-    #--------------------------------------------------------------------------
-    
-    #--------------------------------------------------------------------------
-    def get_season_data_by_year(self):
-        
-        data_dict = self.get_sample_data_by_year()
-        seasons_dict = {}
-        for year in sorted(data_dict.keys()):
-            try:
-                seasons_dict[year] = self.get_season_data(data_dict[year])
-            except AssertionError:
-                print ('Insufficient data for year {}! Excluding...'
-                       .format(str(year)))
-                continue
-        return seasons_dict
-    #--------------------------------------------------------------------------
-        
     #--------------------------------------------------------------------------
     def fit(self, season_df):
         
@@ -270,6 +133,121 @@ class change_point_detect(object):
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
+    def get_change_points(self, n_trials = 1, keep_trial_results = False):
+        
+        if not self.resample:
+            if not n_trials == 1:
+                print ('Multiple trials without resampling are redundant! '
+                       'Setting n_trials to 1...')
+                n_trials = 1        
+        df = self.get_season_data()
+        stats_lst = []
+        trials_lst = []
+        for year in sorted(list(set(df.index.get_level_values('Year')))):
+            print ('Finding change points for year {}:'.format(str(year)))
+            print '    - bootstrap #',
+            year_df = df.loc[year]
+            results_list = []
+            for trial in xrange(n_trials):
+                print str(trial + 1),
+                idx = year_df.groupby(['Season', 'T_class']).mean().index
+                results_df = pd.DataFrame(map(lambda x: 
+                                              self.fit(year_df.loc[x]), idx),
+                                          index = idx)
+                results_list.append(results_df)
+            print 'Done!'
+            print '    - running cross-sample QC...',
+            all_results_df = pd.concat(results_list).reset_index(drop = True)
+            trials_df, stats_df = self._cross_sample_stats_QC(all_results_df,
+                                                              n_trials)
+            stats_df['Year'] = year
+            stats_lst.append(stats_df)
+            if keep_trial_results: 
+                trials_df.index = np.tile(year, len(trials_df))
+                trials_lst.append(trials_df)
+            print 'Done!'
+        all_stats_df = pd.concat(stats_lst)
+        all_stats_df.index = all_stats_df['Year']
+        output_dict = {'summary_statistics': all_stats_df}
+        if keep_trial_results: 
+            output_dict['trial_results'] = pd.concat(trials_lst)
+        return output_dict
+    #--------------------------------------------------------------------------    
+
+    #--------------------------------------------------------------------------
+    def get_n_seasons(self):
+        df = self._get_sample_data()
+        years_dict = {}
+        for year in sorted(list(set(df.index.year))):
+            year_df = df.loc[str(year)]
+            years_dict[year] = len(year_df) / (self.season_n / 2) - 1
+        return years_dict
+    #--------------------------------------------------------------------------
+
+    #--------------------------------------------------------------------------
+    def get_season_data(self):
+    
+        # Extract overlapping series to individual dataframes, for each of 
+        # which: # 1) sort by temperature; 2) create temperature class; 
+        # 3) sort temperature class by u*; 4) add bin numbers to each class, 
+        # then; 5) concatenate
+        df = self._get_sample_data()
+        years_lst = []
+        for year in sorted(list(set(df.index.year))):
+            seasons_lst = []
+            year_df = df.loc[str(year)].copy()
+            year_df['Year'] = year
+            n_seasons = len(year_df) / (self.season_n / 2) - 1
+            T_array = np.concatenate(map(lambda x: np.tile(x, self.season_n / 4), 
+                                         range(4)))
+            bin_array = np.tile(np.concatenate(map(lambda x: np.tile(x, self.bin_n), 
+                                                   range(50))), 4)
+            for season in xrange(n_seasons):
+                start_ind = season * (self.season_n / 2)
+                end_ind = season * (self.season_n / 2) + self.season_n
+                this_df = year_df.iloc[start_ind: end_ind].copy()
+                this_df.sort_values('Ta', axis = 0, inplace = True)
+                this_df['Season'] = season + 1
+                this_df['T_class'] = T_array
+                this_df = pd.concat(map(lambda x: 
+                                        this_df.loc[this_df.T_class == x]
+                                        .sort_values('ustar', axis = 0), 
+                                        range(4)))
+                this_df['Bin'] = bin_array
+                seasons_lst.append(this_df)
+            seasons_df = pd.concat(seasons_lst)
+        
+            # Construct multiindex and use Season, T_class and Bin as levels,
+            # drop them as df variables then average by bin and drop it from the 
+            # index
+            arrays = [seasons_df.Year, seasons_df.Season.values, 
+                      seasons_df.T_class.values, seasons_df.Bin.values]
+            name_list = ['Year', 'Season', 'T_class', 'Bin']
+            tuples = list(zip(*arrays))
+            hierarchical_index = pd.MultiIndex.from_tuples(tuples, 
+                                                           names = name_list)
+            seasons_df.index = hierarchical_index
+            seasons_df.drop(name_list, axis = 1, inplace = True)
+            seasons_df = seasons_df.groupby(level = name_list).mean()
+            seasons_df.reset_index(level = ['Bin'], drop = True, inplace = True)
+            years_lst.append(seasons_df)
+        return pd.concat(years_lst)        
+    #--------------------------------------------------------------------------
+
+    #--------------------------------------------------------------------------
+    def _get_sample_data(self):
+        
+        temp_df = self.df.loc[self.df['Fsd'] < 10, 
+                              ['Fc', 'ustar', 'Ta']].dropna()
+        if not self.resample:
+            return temp_df
+        else:
+            return temp_df.iloc[sorted(np.random.randint(0, 
+                                                         len(temp_df) - 1, 
+                                                         len(temp_df)))]
+    #--------------------------------------------------------------------------
+        
+    #--------------------------------------------------------------------------
     def plot_fit(self, df):
         
         plot_df = df.copy().reset_index(drop = True)
@@ -312,11 +290,14 @@ class change_point_detect(object):
         ax.set_xlabel('$u*\/(m\/s^{-1}$)', fontsize = 16)
         ax.set_ylabel('$NEE\/(\mu mol C\/m^{-2} s^{-1}$)', fontsize = 16)
         ax.axhline(0, color = 'black', lw = 0.5)
-        ax.plot(plot_df.ustar, plot_df.Fc, 'bo')
+        ax.plot(plot_df.ustar, plot_df.Fc, 'bo', label = 'observational data')
         if 'ustar_th_b' in stats_df:
-            ax.plot(plot_df.ustar, plot_df.yHat_b, color = 'red')
+            ax.plot(plot_df.ustar, plot_df.yHat_b, color = 'red', 
+                    label = 'operational model')
         if 'ustar_th_a' in stats_df:
-            ax.plot(plot_df.ustar, plot_df.yHat_a, color = 'green')
+            ax.plot(plot_df.ustar, plot_df.yHat_a, color = 'green',
+                    label = 'diagnostic model')
+        ax.legend(loc = (0.05, 0.85), fontsize = 12, frameon = False)
         return
     #--------------------------------------------------------------------------
 

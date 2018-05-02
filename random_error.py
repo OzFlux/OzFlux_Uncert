@@ -27,13 +27,15 @@ class random_error(object):
           (minimum of: turbulent flux, temperature, wind speed, insolation)
     
     Kwargs:
-        * names_dict (dict): a dictionary containing the required 
-          configuration items (default uses OzFluxQC nomenclature and is 
-          compatible with a standard L5 dataset)
-          (random_error.get_configs_dict())
+        * names_dict (dict): a dictionary that maps the external data names to 
+          the required variables (default uses OzFluxQC nomenclature and is 
+          compatible with a standard L5 dataset - use this as a template to 
+          create an alternative dictionary to pass; if names dict is None, 
+          default is used)
         * num_bins (int): number of bins to use for the averaging of the errors
-        * noct_threshold (int or float): the threshold (in Wm-2 insolation) below which
-          the onset of night occurs
+        * noct_threshold (int or float): the threshold (in Wm-2 insolation) 
+          below which the onset of night occurs
+        * scaling_coefficient (int or float): 
         * t_threshold (int or float): the difference threshold for temperature
         * ws_threshold (int or float): the difference threshold for wind_speed
         * k_threshold (int or float): the difference threshold for insolation

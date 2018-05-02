@@ -13,10 +13,34 @@ from scipy import stats
 import utils
 reload(utils)
 
+# Note that day and night sampling not yet implemented!!!
+
 class model_error(object):
+    '''
+    Class that calculates model error by testing the effect of removing the
+    same proportion of data as is missing from the entire sample from 
+    multiple subsamples
     
-    def __init__(self, dataframe, scaling_coefficient = 1, minimum_pct = 20, 
-                 names_dict = None):
+    Args:
+        * dataframe (pandas dataframe): with columns containing required data
+          (minimum of: observed and modelled fluxes)
+    Kwargs:
+        * scaling_coefficient (int or float): scaling required to calculate
+          a specific summed quantity from the raw quantity - for example,
+          to calculate gC m-2 over a given period, if the raw units are 
+          umolC m-2 s-1, then the scaling required to convert is 
+          12 (conversion from mol to gram) * 10^-6 (conversion from umol to
+          mol)
+        * minimum_pct (int or float): the minimum percentage of available 
+          observational data required to proceed
+        * names_dict (dict): a dictionary that maps the external data names to 
+          the required variables (default uses OzFluxQC nomenclature and is 
+          compatible with a standard L5 dataset - use this as a template to 
+          create an alternative dictionary to pass; if names dict is None, 
+          default is used)        
+    '''
+    def __init__(self, dataframe, scaling_coefficient = 1, minimum_pct = 20,
+                 noct_threshold = 10, names_dict = None):
 
         if names_dict:
             self.external_names = names_dict
@@ -31,6 +55,10 @@ class model_error(object):
 
     #--------------------------------------------------------------------------
     def best_estimate(self):
+        
+        '''
+        Calculate the best estimate sum over the entire period
+        '''
         
         return (self.df.Observations.where(~np.isnan(self.df.Observations), 
                                            self.df.Model).sum() *
@@ -52,7 +80,15 @@ class model_error(object):
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def estimate_model_error(self, subsample_n = 1000, noct_threshold = 10):
+    
+    '''
+    Estimate the nmodel error in the population by subsampling
+    
+    Kwargs:
+        * subsample_n (int): the size of the subsample to be used
+    '''
+    
+    def estimate_model_error(self, subsample_n = 1000):
         
         sub_df = self.df.dropna()
         retain_obs_n = int(self.pct_available / 100 * subsample_n)
@@ -133,6 +169,17 @@ class model_error(object):
         return fig
 
     #--------------------------------------------------------------------------
+    
+    '''
+    Propagate the calculated model error over the entire period of the sample
+    
+    Kwargs:
+        * n_trials (int): the number of trials to use to test cross-trial 
+          uncertainty
+        * return_trials (bool): whether to return the individual trial results,
+          or just the 95%CI
+    '''
+    
     def propagate_model_error(self, n_trials = 1000, return_trials = False):
         
         crit_t = stats.t.isf(0.025, n_trials)

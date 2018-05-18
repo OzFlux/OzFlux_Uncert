@@ -15,13 +15,15 @@ import pdb
 #------------------------------------------------------------------------------
 class change_point_detect(object):
     
-    def __init__(self, dataframe, resample = True, write_dir = None):
+    def __init__(self, dataframe, resample = True, write_dir = None, 
+                 insolation_threshold = 10):
 
         self.df = dataframe
         interval = int(filter(lambda x: x.isdigit(), 
                               pd.infer_freq(self.df.index)))
         assert interval % 30 == 0
         self.resample = resample
+        self.insolation_threshold = insolation_threshold
         self.interval = interval
         self.season_n = 1000 if interval == 30 else 600
         self.bin_n = 5 if interval == 30 else 3
@@ -69,7 +71,7 @@ class change_point_detect(object):
             yHat = (reg_params[0] + reg_params[1] * work_df['ustar_a1'] +
                     reg_params[2] * work_df['ustar_a2'])
             SSE_full = ((work_df['Fc'] - yHat)**2).sum()
-            f_score = (SSE_null_a - SSE_full) / (SSE_full / (df_length - 2))
+            f_score = (SSE_null_a - SSE_full) / (SSE_full / (df_length - 3))
             return f_score, reg_params
         
         def b_model_statistics(cp):
@@ -106,28 +108,33 @@ class change_point_detect(object):
         season_df['int'] = np.ones(df_length)
             
         # Iterate through all possible change points 
-        for i in xrange(1, df_length - 1):
+        for i in xrange(endpts_threshold, df_length - endpts_threshold):
                   
             # Diagnostic (a) and operational (b) model statistics
             f_a_array[i] = a_model_statistics(i)[0]
             f_b_array[i] = b_model_statistics(i)[0]
     
         # Get max f-score, associated change point and ustar value for models
-        # (conditional on passing f score and end points within limits)
+        # (conditional on passing f score)
         d = {}
         fmax_a, cp_a = f_a_array.max(), int(f_a_array.argmax())
-        if ((cp_a > endpts_threshold) & (cp_a < df_length - endpts_threshold)):
-            p_a = self.f_test(fmax_a, df_length, model = 'a')
-            if p_a < psig:
-                d['ustar_th_a'] = season_df['ustar'].iloc[cp_a]
-                d['a0'], d['a1'], d['a2'] = a_model_statistics(cp_a)[1] 
+        p_a = self.f_test(fmax_a, df_length, model = 'a')
+        if p_a < psig:
+            d['ustar_th_a'] = season_df['ustar'].iloc[cp_a]
+            d['a0'], d['a1'], d['a2'] = a_model_statistics(cp_a)[1] 
+        else:
+            for var in ['ustar_th_a', 'a0', 'a1', 'a2']:
+                d[var] = np.nan
                           
         fmax_b, cp_b = f_b_array.max(), int(f_b_array.argmax())
-        if ((cp_b > endpts_threshold) & (cp_b < df_length - endpts_threshold)):
-            p_b = self.f_test(fmax_b, len(season_df), model = 'b')
-            if p_b < psig:    
-                d['ustar_th_b'] = season_df['ustar'].iloc[cp_b]
-                d['b0'], d['b1'] = b_model_statistics(cp_b)[1]
+        p_b = self.f_test(fmax_b, len(season_df), model = 'b')
+        if p_b < psig:    
+            d['ustar_th_b'] = season_df['ustar'].iloc[cp_b]
+            d['b0'], d['b1'] = b_model_statistics(cp_b)[1]
+        else:
+            for var in ['ustar_th_b', 'b0', 'b1']:
+                d[var] = np.nan
+
     
         return d
     #--------------------------------------------------------------------------
@@ -140,7 +147,7 @@ class change_point_detect(object):
                 print ('Multiple trials without resampling are redundant! '
                        'Setting n_trials to 1...')
                 n_trials = 1        
-        df = self.get_season_data()
+        df = self.get_season_data_barrlike()
         stats_lst = []
         trials_lst = []
         for year in sorted(list(set(df.index.get_level_values('Year')))):
@@ -186,7 +193,7 @@ class change_point_detect(object):
 
     #--------------------------------------------------------------------------
     def get_season_data(self):
-    
+
         # Extract overlapping series to individual dataframes, for each of 
         # which: # 1) sort by temperature; 2) create temperature class; 
         # 3) sort temperature class by u*; 4) add bin numbers to each class, 
@@ -225,7 +232,7 @@ class change_point_detect(object):
             name_list = ['Year', 'Season', 'T_class', 'Bin']
             tuples = list(zip(*arrays))
             hierarchical_index = pd.MultiIndex.from_tuples(tuples, 
-                                                           names = name_list)
+                                                           names = name_list)          
             seasons_df.index = hierarchical_index
             seasons_df.drop(name_list, axis = 1, inplace = True)
             seasons_df = seasons_df.groupby(level = name_list).mean()
@@ -235,10 +242,65 @@ class change_point_detect(object):
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
+    def get_season_data_barrlike(self):
+
+        # Extract overlapping series to individual dataframes, for each of 
+        # which: # 1) sort by temperature; 2) create temperature class; 
+        # 3) sort temperature class by u*; 4) add bin numbers to each class, 
+        # then; 5) concatenate
+        df = self._get_sample_data()
+        years_lst = []
+        for year in sorted(list(set(df.index.year))):
+            seasons_lst = []
+            year_df = df.loc[str(year)].copy()
+            year_df['Year'] = year
+            n_seasons = len(year_df) / self.season_n
+            n_per_season = (len(year_df) / (n_seasons * self.bin_n * 4)  
+                            * self.bin_n * 4)
+            n_per_Tclass = n_per_season / 4
+            n_bins = n_per_Tclass / self.bin_n
+            T_array = np.concatenate(map(lambda x: np.tile(x, n_per_Tclass), 
+                                         range(4)))
+            bin_array = np.tile(np.concatenate(map(lambda x: np.tile(x, self.bin_n), 
+                                                   range(n_bins))), 4)
+            for season in xrange(n_seasons):
+                start_ind = season * n_per_season
+                end_ind = start_ind + n_per_season
+                this_df = year_df.iloc[start_ind: end_ind].copy()
+                this_df.sort_values('Ta', axis = 0, inplace = True)
+                this_df['Season'] = season + 1
+                this_df['T_class'] = T_array
+                this_df = pd.concat(map(lambda x: 
+                                        this_df.loc[this_df.T_class == x]
+                                        .sort_values('ustar', axis = 0), 
+                                        range(4)))
+                this_df['Bin'] = bin_array
+                seasons_lst.append(this_df)
+            seasons_df = pd.concat(seasons_lst)
+        
+            # Construct multiindex and use Season, T_class and Bin as levels,
+            # drop them as df variables then average by bin and drop it from the 
+            # index
+            arrays = [seasons_df.Year, seasons_df.Season.values, 
+                      seasons_df.T_class.values, seasons_df.Bin.values]
+            name_list = ['Year', 'Season', 'T_class', 'Bin']
+            tuples = list(zip(*arrays))
+            hierarchical_index = pd.MultiIndex.from_tuples(tuples, 
+                                                           names = name_list)          
+            seasons_df.index = hierarchical_index
+            seasons_df.drop(name_list, axis = 1, inplace = True)
+            seasons_df = seasons_df.groupby(level = name_list).mean()
+            seasons_df.reset_index(level = ['Bin'], drop = True, inplace = True)
+            years_lst.append(seasons_df)
+        return pd.concat(years_lst)    
+    #--------------------------------------------------------------------------
+
+    #--------------------------------------------------------------------------
     def _get_sample_data(self):
         
-        temp_df = self.df.loc[self.df['Fsd'] < 10, 
+        temp_df = self.df.loc[self.df['Fsd'] < self.insolation_threshold, 
                               ['Fc', 'ustar', 'Ta']].dropna()
+        temp_df = temp_df[(temp_df.ustar >= 0) & (temp_df.ustar < 3)]
         if not self.resample:
             return temp_df
         else:
@@ -308,6 +370,7 @@ class change_point_detect(object):
         assert ~np.isnan(f_max)
         assert ~np.isnan(n)
         assert n > 10
+        assert model == 'a' or model == 'b'
         
         if model == 'b':
             
@@ -326,8 +389,9 @@ class change_point_detect(object):
                             [4.7356, 6.2738, 7.7834, 11.2319]])
             idx = [10, 15, 20, 30, 50, 70, 100, 150, 200, 300, 500, 700, 1000]
             cols = [0.8, 0.9, 0.95, 0.99]
+            degfree = 2
             
-        elif model == 'a':
+        if model == 'a':
             
             arr = [[11.646, 15.559, 28.412],
                    [9.651, 11.948, 18.043],
@@ -356,6 +420,7 @@ class change_point_detect(object):
                                   np.linspace(150, 600, 10), 
                                   np.array([800, 1000, 2500])])
             cols = [0.9, 0.95, 0.99]
+            degfree = 3
     
         crit_table = pd.DataFrame(arr, index = idx, columns = cols)
         p_bounds = map(lambda x: 1 - (1 - x) / 2, [cols[0], cols[-1]])
@@ -363,14 +428,16 @@ class change_point_detect(object):
                                                             crit_table[x])(n)), 
                           crit_table.columns)
         if f_max < f_crit_vals[0]:
-            f_adj = (stats.f.ppf(p_bounds[0], len(cols), n) 
+            input_p = 1 - ((1 - p_bounds[0]) / 2)
+            f_adj = (stats.f.ppf(input_p, degfree, n) 
                      * f_max / f_crit_vals[0])
-            p = 2 * (1 - stats.f.cdf(f_adj, len(cols), n))
+            p = 2 * (1 - stats.f.cdf(f_adj, degfree, n))
             if p > 1: p = 1 
         elif f_max > f_crit_vals[-1]:
-            f_adj = (stats.f.ppf(p_bounds[-1], len(cols), n) 
+            input_p = 1 - ((1 - p_bounds[-1]) / 2)
+            f_adj = (stats.f.ppf(input_p, degfree, n) 
                      * f_max / f_crit_vals[-1])
-            p = 2 * (1 - stats.f.cdf(f_adj, len(cols), n))
+            p = 2 * (1 - stats.f.cdf(f_adj, degfree, n))
             if p < 0: p = 0
         else:
             p = PchipInterpolator(f_crit_vals, 

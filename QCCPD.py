@@ -89,7 +89,7 @@ class change_point_detect(object):
         season_df = season_df.reset_index(drop = True)
         season_df = season_df.astype(np.float64)        
         df_length = len(season_df)
-        endpts_threshold = np.floor(df_length * 0.05)
+        endpts_threshold = int(np.floor(df_length * 0.05))
         if endpts_threshold < 3: endpts_threshold = 3
         psig = 0.05
         
@@ -109,7 +109,7 @@ class change_point_detect(object):
             
         # Iterate through all possible change points 
         for i in xrange(endpts_threshold, df_length - endpts_threshold):
-                  
+                      
             # Diagnostic (a) and operational (b) model statistics
             f_a_array[i] = a_model_statistics(i)[0]
             f_b_array[i] = b_model_statistics(i)[0]
@@ -147,7 +147,7 @@ class change_point_detect(object):
                 print ('Multiple trials without resampling are redundant! '
                        'Setting n_trials to 1...')
                 n_trials = 1        
-        df = self.get_season_data_barrlike()
+        df = self.get_season_data()
         stats_lst = []
         trials_lst = []
         for year in sorted(list(set(df.index.get_level_values('Year')))):
@@ -253,6 +253,8 @@ class change_point_detect(object):
         for year in sorted(list(set(df.index.year))):
             seasons_lst = []
             year_df = df.loc[str(year)].copy()
+#            year_df = pd.concat([year_df.loc['2015-12':], 
+#                                 year_df.loc[:'2015-11']])
             year_df['Year'] = year
             n_seasons = len(year_df) / self.season_n
             n_per_season = (len(year_df) / (n_seasons * self.bin_n * 4)  
@@ -304,6 +306,7 @@ class change_point_detect(object):
         if not self.resample:
             return temp_df
         else:
+            pdb.set_trace()
             return temp_df.iloc[sorted(np.random.randint(0, 
                                                          len(temp_df) - 1, 
                                                          len(temp_df)))]

@@ -306,7 +306,6 @@ class change_point_detect(object):
         if not self.resample:
             return temp_df
         else:
-            pdb.set_trace()
             return temp_df.iloc[sorted(np.random.randint(0, 
                                                          len(temp_df) - 1, 
                                                          len(temp_df)))]

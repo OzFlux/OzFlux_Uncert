@@ -146,39 +146,41 @@ class change_point_detect(object):
             if not n_trials == 1:
                 print ('Multiple trials without resampling are redundant! '
                        'Setting n_trials to 1...')
-                n_trials = 1        
-        df = self.get_season_data()
-        stats_lst = []
-        trials_lst = []
-        for year in sorted(list(set(df.index.get_level_values('Year')))):
-            print ('Finding change points for year {}:'.format(str(year)))
-            print '    - bootstrap #',
-            year_df = df.loc[year]
-            results_list = []
-            for trial in xrange(n_trials):
+                n_trials = 1
+        years = sorted(list(set(self.df.index.year)))
+        years_dict = {str(year): [] for year in years}
+        for trial in xrange(n_trials):
+            print 'Finding change points for trial: '
+            print str(trial),
+            df = self.get_season_data()
+            stats_lst = []
+            years_lst = []
+            for year in years:
+                year_df = df.loc[year]
+                if len(year_df) == 0: continue
+                results_list = []
                 print str(trial + 1),
                 idx = year_df.groupby(['Season', 'T_class']).mean().index
                 results_df = pd.DataFrame(map(lambda x: 
                                               self.fit(year_df.loc[x]), idx),
                                           index = idx)
                 results_list.append(results_df)
-            print 'Done!'
-            print '    - running cross-sample QC...',
-            all_results_df = pd.concat(results_list).reset_index(drop = True)
-            trials_df, stats_df = self._cross_sample_stats_QC(all_results_df,
-                                                              n_trials)
+                all_results_df = pd.concat(results_list).reset_index(drop = True)
+                trials_df, stats_df = self._cross_sample_stats_QC(all_results_df,
+                                                                  n_trials)
+            pdb.set_trace()
             stats_df['Year'] = year
             stats_lst.append(stats_df)
             if keep_trial_results: 
                 trials_df.index = np.tile(year, len(trials_df))
                 trials_lst.append(trials_df)
             print 'Done!'
-        all_stats_df = pd.concat(stats_lst)
-        all_stats_df.index = all_stats_df['Year']
-        output_dict = {'summary_statistics': all_stats_df}
-        if keep_trial_results: 
-            output_dict['trial_results'] = pd.concat(trials_lst)
-        return output_dict
+            all_stats_df = pd.concat(stats_lst)
+            all_stats_df.index = all_stats_df['Year']
+            output_dict = {'summary_statistics': all_stats_df}
+            if keep_trial_results: 
+                output_dict['trial_results'] = pd.concat(trials_lst)
+            return output_dict
     #--------------------------------------------------------------------------    
 
     #--------------------------------------------------------------------------
@@ -306,7 +308,6 @@ class change_point_detect(object):
         if not self.resample:
             return temp_df
         else:
-            pdb.set_trace()
             return temp_df.iloc[sorted(np.random.randint(0, 
                                                          len(temp_df) - 1, 
                                                          len(temp_df)))]

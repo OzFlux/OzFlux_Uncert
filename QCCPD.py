@@ -27,11 +27,13 @@ class change_point_detect(object):
         self.interval = interval
         self.season_n = 1000 if interval == 30 else 600
         self.bin_n = 5 if interval == 30 else 3
+        self.years_list = sorted(list(set(dataframe.index.year)))
 #------------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
     def _cross_sample_stats_QC(self, df, n_trials):
         
+        year = np.unique(df.index.get_level_values(0)).item()
         d_mode = len(df.loc[df.b1 > 0, 'b1'])
         e_mode = len(df.loc[df.b1 < 0, 'b1'])
         if e_mode > d_mode:
@@ -50,16 +52,17 @@ class change_point_detect(object):
                                  'ustar_2sig': (df.ustar_th_b.std() * 
                                                 stats.t.isf(0.025, n_trials)),
                                  'ustar_valid_n': df.ustar_th_b.count()},
-                                index = [0])
+                                index = [year])
         df = df[['b0', 'b1', 'ustar_th_b']].dropna()
-        return df, stats_df
+        df.index = np.tile(year, len(df))
+        return {'trial_results': df, 'summary_statistics': stats_df}
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def fit(self, season_df):
+    def fit(self, sample_df):
         
         def a_model_statistics(cp):
-            work_df = season_df.copy()
+            work_df = sample_df.copy()
             work_df['ustar_a1'] = work_df['ustar']
             work_df['ustar_a1'].iloc[cp + 1:] = work_df['ustar_a1'].iloc[cp]
             dummy_array = np.concatenate([np.zeros(cp + 1), 
@@ -67,7 +70,7 @@ class change_point_detect(object):
             work_df['ustar_a2'] = (work_df['ustar'] - 
                                    work_df['ustar'].iloc[cp]) * dummy_array
             reg_params = np.linalg.lstsq(work_df[['int','ustar_a1','ustar_a2']],
-                                         work_df['Fc'])[0]
+                                         work_df['Fc'], rcond = None)[0]
             yHat = (reg_params[0] + reg_params[1] * work_df['ustar_a1'] +
                     reg_params[2] * work_df['ustar_a2'])
             SSE_full = ((work_df['Fc'] - yHat)**2).sum()
@@ -75,29 +78,29 @@ class change_point_detect(object):
             return f_score, reg_params
         
         def b_model_statistics(cp):
-            work_df = season_df.copy()
+            work_df = sample_df.copy()
             work_df['ustar_b'] = work_df['ustar']
             work_df['ustar_b'].iloc[cp + 1:] = work_df['ustar_b'].iloc[cp]
             reg_params = np.linalg.lstsq(work_df[['int','ustar_b']], 
-                                         work_df['Fc'])[0]
+                                         work_df['Fc'], rcond = None)[0]
             yHat = reg_params[0] + reg_params[1] * work_df['ustar_b']
             SSE_full = ((work_df['Fc'] - yHat)**2).sum()
             f_score = (SSE_null_b - SSE_full) / (SSE_full / (df_length - 2))
             return f_score, reg_params
-            
+        
         # Get stuff ready
-        season_df = season_df.reset_index(drop = True)
-        season_df = season_df.astype(np.float64)        
-        df_length = len(season_df)
+        sample_df = sample_df.reset_index(drop = True)
+        sample_df = sample_df.astype(np.float64)        
+        df_length = len(sample_df)
         endpts_threshold = int(np.floor(df_length * 0.05))
         if endpts_threshold < 3: endpts_threshold = 3
         psig = 0.05
         
         # Calculate null model SSE for operational (b) and diagnostic (a) model
-        SSE_null_b = ((season_df['Fc'] - season_df['Fc'].mean())**2).sum()
-        alpha0 , alpha1 = stats.linregress(season_df['ustar'], 
-                                           season_df['Fc'])[:2]
-        SSE_null_a = ((season_df['Fc'] - (season_df['ustar'] * 
+        SSE_null_b = ((sample_df['Fc'] - sample_df['Fc'].mean())**2).sum()
+        alpha0 , alpha1 = stats.linregress(sample_df['ustar'], 
+                                           sample_df['Fc'])[:2]
+        SSE_null_a = ((sample_df['Fc'] - (sample_df['ustar'] * 
                                           alpha0 + alpha1))**2).sum()
         
         # Create arrays to hold statistics
@@ -105,7 +108,7 @@ class change_point_detect(object):
         f_b_array = np.zeros(df_length)
         
         # Add series to df for numpy linalg
-        season_df['int'] = np.ones(df_length)
+        sample_df['int'] = np.ones(df_length)
             
         # Iterate through all possible change points 
         for i in xrange(endpts_threshold, df_length - endpts_threshold):
@@ -113,23 +116,23 @@ class change_point_detect(object):
             # Diagnostic (a) and operational (b) model statistics
             f_a_array[i] = a_model_statistics(i)[0]
             f_b_array[i] = b_model_statistics(i)[0]
-    
+
         # Get max f-score, associated change point and ustar value for models
         # (conditional on passing f score)
         d = {}
         fmax_a, cp_a = f_a_array.max(), int(f_a_array.argmax())
         p_a = self.f_test(fmax_a, df_length, model = 'a')
         if p_a < psig:
-            d['ustar_th_a'] = season_df['ustar'].iloc[cp_a]
+            d['ustar_th_a'] = sample_df['ustar'].iloc[cp_a]
             d['a0'], d['a1'], d['a2'] = a_model_statistics(cp_a)[1] 
         else:
             for var in ['ustar_th_a', 'a0', 'a1', 'a2']:
                 d[var] = np.nan
                           
         fmax_b, cp_b = f_b_array.max(), int(f_b_array.argmax())
-        p_b = self.f_test(fmax_b, len(season_df), model = 'b')
+        p_b = self.f_test(fmax_b, len(sample_df), model = 'b')
         if p_b < psig:    
-            d['ustar_th_b'] = season_df['ustar'].iloc[cp_b]
+            d['ustar_th_b'] = sample_df['ustar'].iloc[cp_b]
             d['b0'], d['b1'] = b_model_statistics(cp_b)[1]
         else:
             for var in ['ustar_th_b', 'b0', 'b1']:
@@ -141,78 +144,72 @@ class change_point_detect(object):
 
     #--------------------------------------------------------------------------
     def get_change_points(self, n_trials = 1, keep_trial_results = False):
+
+        stats_lst = []
+        trials_lst = []
+        print 'Getting change points for year:'        
+        for year in self.years_list:
+            print '    {}'.format(str(year)),
+            results_dict = self.get_change_points_for_year(year, n_trials)
+            stats_lst.append(results_dict['summary_statistics'])
+            trials_lst.append(results_dict['trial_results'])                 
+        output_dict = {'summary_statistics': pd.concat(stats_lst)}
+        if keep_trial_results: 
+            output_dict['trial_results'] = pd.concat(trials_lst)
+        return output_dict
+    #--------------------------------------------------------------------------
+
+    #--------------------------------------------------------------------------
+    def get_change_points_for_year(self, year, n_trials):
         
         if not self.resample:
             if not n_trials == 1:
                 print ('Multiple trials without resampling are redundant! '
                        'Setting n_trials to 1...')
-                n_trials = 1        
-        df = self.get_season_data()
-        stats_lst = []
-        trials_lst = []
-        for year in sorted(list(set(df.index.get_level_values('Year')))):
-            print ('Finding change points for year {}:'.format(str(year)))
-            print '    - bootstrap #',
-            year_df = df.loc[year]
-            results_list = []
-            for trial in xrange(n_trials):
-                print str(trial + 1),
-                idx = year_df.groupby(['Season', 'T_class']).mean().index
-                results_df = pd.DataFrame(map(lambda x: 
-                                              self.fit(year_df.loc[x]), idx),
-                                          index = idx)
-                results_list.append(results_df)
-            print 'Done!'
-            print '    - running cross-sample QC...',
-            all_results_df = pd.concat(results_list).reset_index(drop = True)
-            trials_df, stats_df = self._cross_sample_stats_QC(all_results_df,
-                                                              n_trials)
-            stats_df['Year'] = year
-            stats_lst.append(stats_df)
-            if keep_trial_results: 
-                trials_df.index = np.tile(year, len(trials_df))
-                trials_lst.append(trials_df)
-            print 'Done!'
-        all_stats_df = pd.concat(stats_lst)
-        all_stats_df.index = all_stats_df['Year']
-        output_dict = {'summary_statistics': all_stats_df}
-        if keep_trial_results: 
-            output_dict['trial_results'] = pd.concat(trials_lst)
-        return output_dict
+                n_trials = 1                
+        data_list = []
+        print '- running trial #',
+        for trial in xrange(n_trials):
+            print str(trial + 1),
+            df = self.get_season_data(year)
+            if len(df) == 0: continue
+            idx = df.groupby(['Year', 'Season', 'T_class']).mean().index
+            results_df = pd.DataFrame(map(lambda x: 
+                                          self.fit(df.loc[x]), idx),
+                                      index = idx)
+            data_list.append(results_df)
+        print 'Done!'
+        results_df = pd.concat(data_list)
+        return self._cross_sample_stats_QC(results_df, n_trials)
     #--------------------------------------------------------------------------    
 
     #--------------------------------------------------------------------------
-    def get_n_seasons(self):
-        df = self._get_sample_data()
-        years_dict = {}
-        for year in sorted(list(set(df.index.year))):
-            year_df = df.loc[str(year)]
-            years_dict[year] = len(year_df) / (self.season_n / 2) - 1
-        return years_dict
-    #--------------------------------------------------------------------------
-
-    #--------------------------------------------------------------------------
-    def get_season_data(self):
+    def get_season_data(self, year = None):
 
         # Extract overlapping series to individual dataframes, for each of 
         # which: # 1) sort by temperature; 2) create temperature class; 
         # 3) sort temperature class by u*; 4) add bin numbers to each class, 
         # then; 5) concatenate
-        df = self._get_sample_data()
         years_lst = []
-        for year in sorted(list(set(df.index.year))):
-            seasons_lst = []
-            year_df = df.loc[str(year)].copy()
-            year_df['Year'] = year
-            n_seasons = len(year_df) / (self.season_n / 2) - 1
+        if year: 
+            assert isinstance(year, int)
+            assert year in self.years_list
+            years = [year]
+        else:
+            years = self.years_list
+        for year in years:
+            df = self._get_sample_data(self.df.loc[str(year)])
+            df['Year'] = year
+            n_seasons = len(df) / (self.season_n / 2) - 1
             T_array = np.concatenate(map(lambda x: np.tile(x, self.season_n / 4), 
                                          range(4)))
             bin_array = np.tile(np.concatenate(map(lambda x: np.tile(x, self.bin_n), 
                                                    range(50))), 4)
+            seasons_lst = []
             for season in xrange(n_seasons):
                 start_ind = season * (self.season_n / 2)
                 end_ind = season * (self.season_n / 2) + self.season_n
-                this_df = year_df.iloc[start_ind: end_ind].copy()
+                this_df = df.iloc[start_ind: end_ind].copy()
                 this_df.sort_values('Ta', axis = 0, inplace = True)
                 this_df['Season'] = season + 1
                 this_df['T_class'] = T_array
@@ -227,7 +224,7 @@ class change_point_detect(object):
             # Construct multiindex and use Season, T_class and Bin as levels,
             # drop them as df variables then average by bin and drop it from the 
             # index
-            arrays = [seasons_df.Year, seasons_df.Season.values, 
+            arrays = [seasons_df.Year.values, seasons_df.Season.values, 
                       seasons_df.T_class.values, seasons_df.Bin.values]
             name_list = ['Year', 'Season', 'T_class', 'Bin']
             tuples = list(zip(*arrays))
@@ -298,10 +295,10 @@ class change_point_detect(object):
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def _get_sample_data(self):
+    def _get_sample_data(self, df):
         
-        temp_df = self.df.loc[self.df['Fsd'] < self.insolation_threshold, 
-                              ['Fc', 'ustar', 'Ta']].dropna()
+        temp_df = df.loc[df['Fsd'] < self.insolation_threshold, 
+                         ['Fc', 'ustar', 'Ta']].dropna()
         temp_df = temp_df[(temp_df.ustar >= 0) & (temp_df.ustar < 3)]
         if not self.resample:
             return temp_df

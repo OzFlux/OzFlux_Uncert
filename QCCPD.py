@@ -171,7 +171,7 @@ class change_point_detect(object):
         print '- running trial #',
         for trial in xrange(n_trials):
             print str(trial + 1),
-            df = self.get_season_data(year)
+            df = self.get_season_data_barrlike(year)
             if len(df) == 0: continue
             idx = df.groupby(['Year', 'Season', 'T_class']).mean().index
             results_df = pd.DataFrame(map(lambda x: 
@@ -239,22 +239,27 @@ class change_point_detect(object):
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def get_season_data_barrlike(self):
+    def get_season_data_barrlike(self, year = None):
 
         # Extract overlapping series to individual dataframes, for each of 
         # which: # 1) sort by temperature; 2) create temperature class; 
         # 3) sort temperature class by u*; 4) add bin numbers to each class, 
         # then; 5) concatenate
-        df = self._get_sample_data()
         years_lst = []
-        for year in sorted(list(set(df.index.year))):
+        if year: 
+            assert isinstance(year, int)
+            assert year in self.years_list
+            years = [year]
+        else:
+            years = self.years_list
+        for year in years:
+            df = self._get_sample_data(self.df.loc[str(year)])
+            df['Year'] = year            
             seasons_lst = []
-            year_df = df.loc[str(year)].copy()
-#            year_df = pd.concat([year_df.loc['2015-12':], 
-#                                 year_df.loc[:'2015-11']])
-            year_df['Year'] = year
-            n_seasons = len(year_df) / self.season_n
-            n_per_season = (len(year_df) / (n_seasons * self.bin_n * 4)  
+#            df = pd.concat([year_df.loc['2015-12':], 
+#                            year_df.loc[:'2015-11']])
+            n_seasons = len(df) / self.season_n
+            n_per_season = (len(df) / (n_seasons * self.bin_n * 4)  
                             * self.bin_n * 4)
             n_per_Tclass = n_per_season / 4
             n_bins = n_per_Tclass / self.bin_n
@@ -265,7 +270,7 @@ class change_point_detect(object):
             for season in xrange(n_seasons):
                 start_ind = season * n_per_season
                 end_ind = start_ind + n_per_season
-                this_df = year_df.iloc[start_ind: end_ind].copy()
+                this_df = df.iloc[start_ind: end_ind].copy()
                 this_df.sort_values('Ta', axis = 0, inplace = True)
                 this_df['Season'] = season + 1
                 this_df['T_class'] = T_array

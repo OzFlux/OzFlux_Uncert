@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import pdb
 
-from QCCPD import fit
+import QCCPD as cpd
 
 def barr_nomenclature(stats_df):
     
@@ -135,8 +135,8 @@ else:
     df['Fc'] = flux_series + error_series if noise_on else flux_series
 
     if save_to_file: df.to_csv(path)
-    
-stats_df = pd.DataFrame(fit(df), index = [0])
+
+stats_df = pd.DataFrame(cpd.fit(df), index = [0])
 
 barr_nomenclature(stats_df)
 

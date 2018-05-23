@@ -16,14 +16,16 @@ import pdb
 class change_point_detect(object):
     
     def __init__(self, dataframe, resample = True, write_dir = None, 
-                 insolation_threshold = 10):
+                 insolation_threshold = 10, season_routine = 'barr'):
 
         self.df = dataframe
         interval = int(filter(lambda x: x.isdigit(), 
                               pd.infer_freq(self.df.index)))
         assert interval % 30 == 0
+        assert season_routine in ['standard', 'barr']
         self.resample = resample
         self.insolation_threshold = insolation_threshold
+        self.season_routine = season_routine
         self.interval = interval
         self.season_n = 1000 if interval == 30 else 600
         self.bin_n = 5 if interval == 30 else 3
@@ -59,90 +61,6 @@ class change_point_detect(object):
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def fit(self, sample_df):
-        
-        def a_model_statistics(cp):
-            work_df = sample_df.copy()
-            work_df['ustar_a1'] = work_df['ustar']
-            work_df['ustar_a1'].iloc[cp + 1:] = work_df['ustar_a1'].iloc[cp]
-            dummy_array = np.concatenate([np.zeros(cp + 1), 
-                                          np.ones(df_length - (cp + 1))])
-            work_df['ustar_a2'] = (work_df['ustar'] - 
-                                   work_df['ustar'].iloc[cp]) * dummy_array
-            reg_params = np.linalg.lstsq(work_df[['int','ustar_a1','ustar_a2']],
-                                         work_df['Fc'], rcond = None)[0]
-            yHat = (reg_params[0] + reg_params[1] * work_df['ustar_a1'] +
-                    reg_params[2] * work_df['ustar_a2'])
-            SSE_full = ((work_df['Fc'] - yHat)**2).sum()
-            f_score = (SSE_null_a - SSE_full) / (SSE_full / (df_length - 3))
-            return f_score, reg_params
-        
-        def b_model_statistics(cp):
-            work_df = sample_df.copy()
-            work_df['ustar_b'] = work_df['ustar']
-            work_df['ustar_b'].iloc[cp + 1:] = work_df['ustar_b'].iloc[cp]
-            reg_params = np.linalg.lstsq(work_df[['int','ustar_b']], 
-                                         work_df['Fc'], rcond = None)[0]
-            yHat = reg_params[0] + reg_params[1] * work_df['ustar_b']
-            SSE_full = ((work_df['Fc'] - yHat)**2).sum()
-            f_score = (SSE_null_b - SSE_full) / (SSE_full / (df_length - 2))
-            return f_score, reg_params
-        
-        # Get stuff ready
-        sample_df = sample_df.reset_index(drop = True)
-        sample_df = sample_df.astype(np.float64)        
-        df_length = len(sample_df)
-        endpts_threshold = int(np.floor(df_length * 0.05))
-        if endpts_threshold < 3: endpts_threshold = 3
-        psig = 0.05
-        
-        # Calculate null model SSE for operational (b) and diagnostic (a) model
-        SSE_null_b = ((sample_df['Fc'] - sample_df['Fc'].mean())**2).sum()
-        alpha0 , alpha1 = stats.linregress(sample_df['ustar'], 
-                                           sample_df['Fc'])[:2]
-        SSE_null_a = ((sample_df['Fc'] - (sample_df['ustar'] * 
-                                          alpha0 + alpha1))**2).sum()
-        
-        # Create arrays to hold statistics
-        f_a_array = np.zeros(df_length)
-        f_b_array = np.zeros(df_length)
-        
-        # Add series to df for numpy linalg
-        sample_df['int'] = np.ones(df_length)
-            
-        # Iterate through all possible change points 
-        for i in xrange(endpts_threshold, df_length - endpts_threshold):
-                      
-            # Diagnostic (a) and operational (b) model statistics
-            f_a_array[i] = a_model_statistics(i)[0]
-            f_b_array[i] = b_model_statistics(i)[0]
-
-        # Get max f-score, associated change point and ustar value for models
-        # (conditional on passing f score)
-        d = {}
-        fmax_a, cp_a = f_a_array.max(), int(f_a_array.argmax())
-        p_a = self.f_test(fmax_a, df_length, model = 'a')
-        if p_a < psig:
-            d['ustar_th_a'] = sample_df['ustar'].iloc[cp_a]
-            d['a0'], d['a1'], d['a2'] = a_model_statistics(cp_a)[1] 
-        else:
-            for var in ['ustar_th_a', 'a0', 'a1', 'a2']:
-                d[var] = np.nan
-                          
-        fmax_b, cp_b = f_b_array.max(), int(f_b_array.argmax())
-        p_b = self.f_test(fmax_b, len(sample_df), model = 'b')
-        if p_b < psig:    
-            d['ustar_th_b'] = sample_df['ustar'].iloc[cp_b]
-            d['b0'], d['b1'] = b_model_statistics(cp_b)[1]
-        else:
-            for var in ['ustar_th_b', 'b0', 'b1']:
-                d[var] = np.nan
-
-    
-        return d
-    #--------------------------------------------------------------------------
-
-    #--------------------------------------------------------------------------
     def get_change_points(self, n_trials = 1, keep_trial_results = False):
 
         stats_lst = []
@@ -169,19 +87,34 @@ class change_point_detect(object):
                 n_trials = 1                
         data_list = []
         print '- running trial #',
+        season_func = self._get_season_function()
         for trial in xrange(n_trials):
             print str(trial + 1),
-            df = self.get_season_data_barrlike(year)
+            df = season_func(year)
             if len(df) == 0: continue
             idx = df.groupby(['Year', 'Season', 'T_class']).mean().index
             results_df = pd.DataFrame(map(lambda x: 
-                                          self.fit(df.loc[x]), idx),
+                                          fit(df.loc[x]), idx),
                                       index = idx)
             data_list.append(results_df)
         print 'Done!'
         results_df = pd.concat(data_list)
         return self._cross_sample_stats_QC(results_df, n_trials)
     #--------------------------------------------------------------------------    
+
+    #--------------------------------------------------------------------------
+    def _get_sample_data(self, df):
+        
+        temp_df = df.loc[df['Fsd'] < self.insolation_threshold, 
+                         ['Fc', 'ustar', 'Ta']].dropna()
+        temp_df = temp_df[(temp_df.ustar >= 0) & (temp_df.ustar < 3)]
+        if not self.resample:
+            return temp_df
+        else:
+            return temp_df.iloc[sorted(np.random.randint(0, 
+                                                         len(temp_df) - 1, 
+                                                         len(temp_df)))]
+    #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
     def get_season_data(self, year = None):
@@ -300,17 +233,10 @@ class change_point_detect(object):
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def _get_sample_data(self, df):
-        
-        temp_df = df.loc[df['Fsd'] < self.insolation_threshold, 
-                         ['Fc', 'ustar', 'Ta']].dropna()
-        temp_df = temp_df[(temp_df.ustar >= 0) & (temp_df.ustar < 3)]
-        if not self.resample:
-            return temp_df
-        else:
-            return temp_df.iloc[sorted(np.random.randint(0, 
-                                                         len(temp_df) - 1, 
-                                                         len(temp_df)))]
+    def _get_season_function(self):
+        d = {'standard': self.get_season_data,
+             'barr': self.get_season_data_barrlike}
+        return d[self.season_routine]
     #--------------------------------------------------------------------------
         
     #--------------------------------------------------------------------------
@@ -367,87 +293,175 @@ class change_point_detect(object):
         return
     #--------------------------------------------------------------------------
 
-    #--------------------------------------------------------------------------
-    def f_test(self, f_max, n, model):
-        
-        p = np.NaN
-        assert ~np.isnan(f_max)
-        assert ~np.isnan(n)
-        assert n > 10
-        assert model == 'a' or model == 'b'
-        
-        if model == 'b':
-            
-            arr = np.array([[3.9293, 6.2992, 9.1471, 18.2659], 
-                            [3.7734, 5.6988, 7.8770, 13.8100],
-                            [3.7516, 5.5172, 7.4426, 12.6481],
-                            [3.7538, 5.3224, 7.0306, 11.4461],
-                            [3.7941, 5.3030, 6.8758, 10.6635],
-                            [3.8548, 5.3480, 6.8883, 10.5026],
-                            [3.9798, 5.4465, 6.9184, 10.4527],
-                            [4.0732, 5.5235, 6.9811, 10.3859],
-                            [4.1467, 5.6136, 7.0624, 10.5596],
-                            [4.2770, 5.7391, 7.2005, 10.6871],
-                            [4.4169, 5.8733, 7.3421, 10.6751],
-                            [4.5556, 6.0591, 7.5627, 11.0072],
-                            [4.7356, 6.2738, 7.7834, 11.2319]])
-            idx = [10, 15, 20, 30, 50, 70, 100, 150, 200, 300, 500, 700, 1000]
-            cols = [0.8, 0.9, 0.95, 0.99]
-            degfree = 2
-            
-        if model == 'a':
-            
-            arr = [[11.646, 15.559, 28.412],
-                   [9.651, 11.948, 18.043],
-                   [9.379, 11.396, 16.249],
-                   [9.261, 11.148, 15.75],
-                   [9.269, 11.068, 15.237],
-                   [9.296, 11.072, 15.252],
-                   [9.296, 11.059, 14.985],
-                   [9.341, 11.072, 15.013],
-                   [9.397, 11.08, 14.891],
-                   [9.398, 11.085, 14.874],
-                   [9.506, 11.127, 14.828],
-                   [9.694, 11.208, 14.898],
-                   [9.691, 11.31, 14.975],
-                   [9.79, 11.406, 14.998],
-                   [9.794, 11.392, 15.044],
-                   [9.84, 11.416, 14.98],
-                   [9.872, 11.474, 15.072],
-                   [9.929, 11.537, 15.115],
-                   [9.955, 11.552, 15.086],
-                   [9.995, 11.549, 15.164],
-                   [10.102, 11.673, 15.292],
-                   [10.169, 11.749, 15.154],
-                   [10.478, 12.064, 15.519]]
-            idx = np.concatenate([np.linspace(10, 100, 10), 
-                                  np.linspace(150, 600, 10), 
-                                  np.array([800, 1000, 2500])])
-            cols = [0.9, 0.95, 0.99]
-            degfree = 3
+#------------------------------------------------------------------------------
+#def fit(self, sample_df):
+def fit(sample_df):
     
-        crit_table = pd.DataFrame(arr, index = idx, columns = cols)
-        p_bounds = map(lambda x: 1 - (1 - x) / 2, [cols[0], cols[-1]])
-        f_crit_vals = map(lambda x: float(PchipInterpolator(crit_table.index, 
-                                                            crit_table[x])(n)), 
-                          crit_table.columns)
-        if f_max < f_crit_vals[0]:
-            input_p = 1 - ((1 - p_bounds[0]) / 2)
-            f_adj = (stats.f.ppf(input_p, degfree, n) 
-                     * f_max / f_crit_vals[0])
-            p = 2 * (1 - stats.f.cdf(f_adj, degfree, n))
-            if p > 1: p = 1 
-        elif f_max > f_crit_vals[-1]:
-            input_p = 1 - ((1 - p_bounds[-1]) / 2)
-            f_adj = (stats.f.ppf(input_p, degfree, n) 
-                     * f_max / f_crit_vals[-1])
-            p = 2 * (1 - stats.f.cdf(f_adj, degfree, n))
-            if p < 0: p = 0
-        else:
-            p = PchipInterpolator(f_crit_vals, 
-                                  (1 - np.array(cols)).tolist())(f_max)
-        return p
-    #--------------------------------------------------------------------------
+    def a_model_statistics(cp):
+        work_df = sample_df.copy()
+        work_df['ustar_a1'] = work_df['ustar']
+        work_df['ustar_a1'].iloc[cp + 1:] = work_df['ustar_a1'].iloc[cp]
+        dummy_array = np.concatenate([np.zeros(cp + 1), 
+                                      np.ones(df_length - (cp + 1))])
+        work_df['ustar_a2'] = (work_df['ustar'] - 
+                               work_df['ustar'].iloc[cp]) * dummy_array
+        reg_params = np.linalg.lstsq(work_df[['int','ustar_a1','ustar_a2']],
+                                     work_df['Fc'], rcond = None)[0]
+        yHat = (reg_params[0] + reg_params[1] * work_df['ustar_a1'] +
+                reg_params[2] * work_df['ustar_a2'])
+        SSE_full = ((work_df['Fc'] - yHat)**2).sum()
+        f_score = (SSE_null_a - SSE_full) / (SSE_full / (df_length - 3))
+        return f_score, reg_params
+    
+    def b_model_statistics(cp):
+        work_df = sample_df.copy()
+        work_df['ustar_b'] = work_df['ustar']
+        work_df['ustar_b'].iloc[cp + 1:] = work_df['ustar_b'].iloc[cp]
+        reg_params = np.linalg.lstsq(work_df[['int','ustar_b']], 
+                                     work_df['Fc'], rcond = None)[0]
+        yHat = reg_params[0] + reg_params[1] * work_df['ustar_b']
+        SSE_full = ((work_df['Fc'] - yHat)**2).sum()
+        f_score = (SSE_null_b - SSE_full) / (SSE_full / (df_length - 2))
+        return f_score, reg_params
+    
+    # Get stuff ready
+    sample_df = sample_df.reset_index(drop = True)
+    sample_df = sample_df.astype(np.float64)        
+    df_length = len(sample_df)
+    endpts_threshold = int(np.floor(df_length * 0.05))
+    if endpts_threshold < 3: endpts_threshold = 3
+    psig = 0.05
+    
+    # Calculate null model SSE for operational (b) and diagnostic (a) model
+    SSE_null_b = ((sample_df['Fc'] - sample_df['Fc'].mean())**2).sum()
+    alpha0 , alpha1 = stats.linregress(sample_df['ustar'], 
+                                       sample_df['Fc'])[:2]
+    SSE_null_a = ((sample_df['Fc'] - (sample_df['ustar'] * 
+                                      alpha0 + alpha1))**2).sum()
+    
+    # Create arrays to hold statistics
+    f_a_array = np.zeros(df_length)
+    f_b_array = np.zeros(df_length)
+    
+    # Add series to df for numpy linalg
+    sample_df['int'] = np.ones(df_length)
+        
+    # Iterate through all possible change points 
+    for i in xrange(endpts_threshold, df_length - endpts_threshold):
+                  
+        # Diagnostic (a) and operational (b) model statistics
+        f_a_array[i] = a_model_statistics(i)[0]
+        f_b_array[i] = b_model_statistics(i)[0]
+
+    # Get max f-score, associated change point and ustar value for models
+    # (conditional on passing f score)
+    d = {}
+    fmax_a, cp_a = f_a_array.max(), int(f_a_array.argmax())
+#    p_a = self.f_test(fmax_a, df_length, model = 'a')
+    p_a = f_test(fmax_a, df_length, model = 'a')    
+    if p_a < psig:
+        d['ustar_th_a'] = sample_df['ustar'].iloc[cp_a]
+        d['a0'], d['a1'], d['a2'] = a_model_statistics(cp_a)[1] 
+    else:
+        for var in ['ustar_th_a', 'a0', 'a1', 'a2']:
+            d[var] = np.nan
+                      
+    fmax_b, cp_b = f_b_array.max(), int(f_b_array.argmax())
+#    p_b = self.f_test(fmax_b, len(sample_df), model = 'b')
+    p_b = f_test(fmax_b, len(sample_df), model = 'b')
+    if p_b < psig:    
+        d['ustar_th_b'] = sample_df['ustar'].iloc[cp_b]
+        d['b0'], d['b1'] = b_model_statistics(cp_b)[1]
+    else:
+        for var in ['ustar_th_b', 'b0', 'b1']:
+            d[var] = np.nan
+
+
+    return d
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
+#def f_test(self, f_max, n, model):
+def f_test(f_max, n, model):
+    
+    p = np.NaN
+    assert ~np.isnan(f_max)
+    assert ~np.isnan(n)
+    assert n > 10
+    assert model == 'a' or model == 'b'
+    
+    if model == 'b':
+        
+        arr = np.array([[3.9293, 6.2992, 9.1471, 18.2659], 
+                        [3.7734, 5.6988, 7.8770, 13.8100],
+                        [3.7516, 5.5172, 7.4426, 12.6481],
+                        [3.7538, 5.3224, 7.0306, 11.4461],
+                        [3.7941, 5.3030, 6.8758, 10.6635],
+                        [3.8548, 5.3480, 6.8883, 10.5026],
+                        [3.9798, 5.4465, 6.9184, 10.4527],
+                        [4.0732, 5.5235, 6.9811, 10.3859],
+                        [4.1467, 5.6136, 7.0624, 10.5596],
+                        [4.2770, 5.7391, 7.2005, 10.6871],
+                        [4.4169, 5.8733, 7.3421, 10.6751],
+                        [4.5556, 6.0591, 7.5627, 11.0072],
+                        [4.7356, 6.2738, 7.7834, 11.2319]])
+        idx = [10, 15, 20, 30, 50, 70, 100, 150, 200, 300, 500, 700, 1000]
+        cols = [0.8, 0.9, 0.95, 0.99]
+        degfree = 2
+        
+    if model == 'a':
+        
+        arr = [[11.646, 15.559, 28.412],
+               [9.651, 11.948, 18.043],
+               [9.379, 11.396, 16.249],
+               [9.261, 11.148, 15.75],
+               [9.269, 11.068, 15.237],
+               [9.296, 11.072, 15.252],
+               [9.296, 11.059, 14.985],
+               [9.341, 11.072, 15.013],
+               [9.397, 11.08, 14.891],
+               [9.398, 11.085, 14.874],
+               [9.506, 11.127, 14.828],
+               [9.694, 11.208, 14.898],
+               [9.691, 11.31, 14.975],
+               [9.79, 11.406, 14.998],
+               [9.794, 11.392, 15.044],
+               [9.84, 11.416, 14.98],
+               [9.872, 11.474, 15.072],
+               [9.929, 11.537, 15.115],
+               [9.955, 11.552, 15.086],
+               [9.995, 11.549, 15.164],
+               [10.102, 11.673, 15.292],
+               [10.169, 11.749, 15.154],
+               [10.478, 12.064, 15.519]]
+        idx = np.concatenate([np.linspace(10, 100, 10), 
+                              np.linspace(150, 600, 10), 
+                              np.array([800, 1000, 2500])])
+        cols = [0.9, 0.95, 0.99]
+        degfree = 3
+
+    crit_table = pd.DataFrame(arr, index = idx, columns = cols)
+    p_bounds = map(lambda x: 1 - (1 - x) / 2, [cols[0], cols[-1]])
+    f_crit_vals = map(lambda x: float(PchipInterpolator(crit_table.index, 
+                                                        crit_table[x])(n)), 
+                      crit_table.columns)
+    if f_max < f_crit_vals[0]:
+        input_p = 1 - ((1 - p_bounds[0]) / 2)
+        f_adj = (stats.f.ppf(input_p, degfree, n) 
+                 * f_max / f_crit_vals[0])
+        p = 2 * (1 - stats.f.cdf(f_adj, degfree, n))
+        if p > 1: p = 1 
+    elif f_max > f_crit_vals[-1]:
+        input_p = 1 - ((1 - p_bounds[-1]) / 2)
+        f_adj = (stats.f.ppf(input_p, degfree, n) 
+                 * f_max / f_crit_vals[-1])
+        p = 2 * (1 - stats.f.cdf(f_adj, degfree, n))
+        if p < 0: p = 0
+    else:
+        p = PchipInterpolator(f_crit_vals, 
+                              (1 - np.array(cols)).tolist())(f_max)
+    return p
+#------------------------------------------------------------------------------
 
 # Plot PDF of u* values and write to specified folder           
 def plot_hist(S,mu,sig,crit_t,year,plot_out):
@@ -473,23 +487,3 @@ def plot_hist(S,mu,sig,crit_t,year,plot_out):
     plot_out_name='ustar'+str(year)+'.jpg'
     fig.savefig(os.path.join(plot_out,plot_out_name))
     plt.close(fig)
-
-# Plot normalised slope parameters to identify outlying years and output to    
-# results folder - user can discard output for that year                       
-def plot_slopes(df,plot_out):
-    df=df.reset_index(drop=True)
-    fig=plt.figure(figsize=(12,8))
-    fig.patch.set_facecolor('white')
-    plt.scatter(df['norm_a1_median'],df['norm_a2_median'],s=80,edgecolors='blue',facecolors='none')
-    plt.xlim(-4,4)
-    plt.ylim(-4,4)
-    plt.xlabel('$Median\/normalised\/ a^{1}$',fontsize=16)
-    plt.ylabel('$Median\/normalised\/ a^{2}$',fontsize=16)
-    plt.title('Normalised slope parameters \n')
-    plt.axvline(x=1,color='black',linestyle='dotted')
-    plt.axhline(y=0,color='black',linestyle='dotted')
-    plot_out_name='normalised_slope_parameters.jpg'
-    fig.savefig(os.path.join(plot_out,plot_out_name))
-    plt.close(fig)
-
-#------------------------------------------------------------------------------

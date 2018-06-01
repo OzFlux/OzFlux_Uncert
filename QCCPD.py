@@ -189,8 +189,8 @@ class change_point_detect(object):
             df = self._get_sample_data(self.df.loc[str(year)])
             df['Year'] = year            
             seasons_lst = []
-#            df = pd.concat([year_df.loc['2015-12':], 
-#                            year_df.loc[:'2015-11']])
+            df = pd.concat([df.loc[df.index.dayofyear >= 336], 
+                            df.loc[df.index.dayofyear < 336]])
             n_seasons = len(df) / self.season_n
             n_per_season = (len(df) / (n_seasons * self.bin_n * 4)  
                             * self.bin_n * 4)
@@ -357,7 +357,6 @@ def fit(sample_df):
     # (conditional on passing f score)
     d = {}
     fmax_a, cp_a = f_a_array.max(), int(f_a_array.argmax())
-#    p_a = self.f_test(fmax_a, df_length, model = 'a')
     p_a = f_test(fmax_a, df_length, model = 'a')    
     if p_a < psig:
         d['ustar_th_a'] = sample_df['ustar'].iloc[cp_a]
@@ -367,7 +366,6 @@ def fit(sample_df):
             d[var] = np.nan
                       
     fmax_b, cp_b = f_b_array.max(), int(f_b_array.argmax())
-#    p_b = self.f_test(fmax_b, len(sample_df), model = 'b')
     p_b = f_test(fmax_b, len(sample_df), model = 'b')
     if p_b < psig:    
         d['ustar_th_b'] = sample_df['ustar'].iloc[cp_b]

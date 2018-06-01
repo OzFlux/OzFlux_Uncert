@@ -69,8 +69,9 @@ class change_point_detect(object):
         for year in self.years_list:
             print '    {}'.format(str(year)),
             results_dict = self.get_change_points_for_year(year, n_trials)
-            stats_lst.append(results_dict['summary_statistics'])
-            trials_lst.append(results_dict['trial_results'])                 
+            if results_dict:
+                stats_lst.append(results_dict['summary_statistics'])
+                trials_lst.append(results_dict['trial_results'])                 
         output_dict = {'summary_statistics': pd.concat(stats_lst)}
         if keep_trial_results: 
             output_dict['trial_results'] = pd.concat(trials_lst)
@@ -90,8 +91,11 @@ class change_point_detect(object):
         season_func = self._get_season_function()
         for trial in xrange(n_trials):
             print str(trial + 1),
-            df = season_func(year)
-            if len(df) == 0: continue
+            try:
+                df = season_func(year)
+            except RuntimeError, e:
+                print e
+                return
             idx = df.groupby(['Year', 'Season', 'T_class']).mean().index
             results_df = pd.DataFrame(map(lambda x: 
                                           fit(df.loc[x]), idx),
@@ -108,6 +112,8 @@ class change_point_detect(object):
         temp_df = df.loc[df['Fsd'] < self.insolation_threshold, 
                          ['Fc', 'ustar', 'Ta']].dropna()
         temp_df = temp_df[(temp_df.ustar >= 0) & (temp_df.ustar < 3)]
+        if not len(temp_df) > 4 * self.season_n: 
+            raise RuntimeError('Insufficent data available')
         if not self.resample:
             return temp_df
         else:

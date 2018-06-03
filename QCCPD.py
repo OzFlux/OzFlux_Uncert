@@ -33,7 +33,7 @@ class change_point_detect(object):
 #------------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def _cross_sample_stats_QC(self, df, n_trials):
+    def _cross_sample_stats_QC(self, df):
         
         year = np.unique(df.index.get_level_values(0)).item()
         d_mode = len(df.loc[df.b1 > 0, 'b1'])
@@ -42,8 +42,7 @@ class change_point_detect(object):
             df.loc[df.b1 > 0, ['ustar_th_b', 'b0', 'b1']] = np.nan
         else:
             df.loc[df.b1 < 0, ['ustar_th_b', 'b0', 'b1']] = np.nan
-        if len(df) < n_trials * 4:
-            raise RuntimeError('Valid change points below critical threshold!')
+        valid_n = df.ustar_th_b.count()
         stats_df = pd.DataFrame({'norm_a1': (df.a1 * (df.ustar_th_a / 
                                                       (df.a0 + df.a1 * 
                                                        df.ustar_th_a))).median(),
@@ -52,8 +51,8 @@ class change_point_detect(object):
                                                        df.ustar_th_a))).median(),
                                  'ustar_mean': df.ustar_th_b.mean(),
                                  'ustar_2sig': (df.ustar_th_b.std() * 
-                                                stats.t.isf(0.025, n_trials)),
-                                 'ustar_valid_n': df.ustar_th_b.count()},
+                                                stats.t.isf(0.025, valid_n)),
+                                 'ustar_valid_n': valid_n},
                                 index = [year])
         df = df[['b0', 'b1', 'ustar_th_b']].dropna()
         df.index = np.tile(year, len(df))
@@ -71,7 +70,10 @@ class change_point_detect(object):
             results_dict = self.get_change_points_for_year(year, n_trials)
             if results_dict:
                 stats_lst.append(results_dict['summary_statistics'])
-                trials_lst.append(results_dict['trial_results'])                 
+                trials_lst.append(results_dict['trial_results'])
+        if not stats_lst:
+            print 'Could not find any valid change points!'
+            return
         output_dict = {'summary_statistics': pd.concat(stats_lst)}
         if keep_trial_results: 
             output_dict['trial_results'] = pd.concat(trials_lst)
@@ -79,23 +81,25 @@ class change_point_detect(object):
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
+
+    # Build in a check for whether is enough data BEFORE the shuffle, otherwise
+    # every trial will be executed even when there is insufficient data (do we
+    # need to trap edge case where there is enough data before reshuffle, but
+    # slightly less than enough after? Probably not!
     def get_change_points_for_year(self, year, n_trials):
         
         if not self.resample:
             if not n_trials == 1:
                 print ('Multiple trials without resampling are redundant! '
                        'Setting n_trials to 1...')
-                n_trials = 1                
+                n_trials = 1          
         data_list = []
         print '- running trial #',
         season_func = self._get_season_function()
         for trial in xrange(n_trials):
             print str(trial + 1),
-            try:
-                df = season_func(year)
-            except RuntimeError, e:
-                print e
-                return
+            try: df = season_func(year)
+            except RuntimeError: continue
             idx = df.groupby(['Year', 'Season', 'T_class']).mean().index
             results_df = pd.DataFrame(map(lambda x: 
                                           fit(df.loc[x]), idx),
@@ -103,7 +107,7 @@ class change_point_detect(object):
             data_list.append(results_df)
         print 'Done!'
         results_df = pd.concat(data_list)
-        return self._cross_sample_stats_QC(results_df, n_trials)
+        return self._cross_sample_stats_QC(results_df)
     #--------------------------------------------------------------------------    
 
     #--------------------------------------------------------------------------
@@ -111,15 +115,16 @@ class change_point_detect(object):
         
         temp_df = df.loc[df['Fsd'] < self.insolation_threshold, 
                          ['Fc', 'ustar', 'Ta']].dropna()
-        temp_df = temp_df[(temp_df.ustar >= 0) & (temp_df.ustar < 3)]
+        temp_df = temp_df[(temp_df.ustar >= 0) & (temp_df.ustar <= 3)]
+        if len(temp_df) == 0:
+            raise RuntimeError('No data available')
+        if self.resample:
+            temp_df = temp_df.iloc[sorted(np.random.randint(0, 
+                                                            len(temp_df) - 1, 
+                                                            len(temp_df)))]
         if not len(temp_df) > 4 * self.season_n: 
             raise RuntimeError('Insufficent data available')
-        if not self.resample:
-            return temp_df
-        else:
-            return temp_df.iloc[sorted(np.random.randint(0, 
-                                                         len(temp_df) - 1, 
-                                                         len(temp_df)))]
+        return temp_df
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
@@ -244,63 +249,8 @@ class change_point_detect(object):
              'barr': self.get_season_data_barrlike}
         return d[self.season_routine]
     #--------------------------------------------------------------------------
-        
-    #--------------------------------------------------------------------------
-    def plot_fit(self, df):
-        
-        plot_df = df.copy().reset_index(drop = True)
-        stats_df = pd.DataFrame(self.fit(df), index = [0])
-        if stats_df.empty:
-            raise RuntimeError('Could not find a valid changepoint for this '
-                               'sample')
-        zero_list = [np.nan, 0, np.nan]
-        if 'ustar_th_b' in stats_df:
-            zero_list.append(stats_df.b0.item())
-            cp_b = np.where(df.ustar == stats_df.ustar_th_b.item())[0].item()
-            plot_df['yHat_b'] = (stats_df.ustar_th_b.item() * stats_df.b1.item() + 
-                                 stats_df.b0.item())
-            plot_df['yHat_b'].iloc[:cp_b] = (plot_df.ustar.iloc[:cp_b] * 
-                                             stats_df.b1.item() +
-                                             stats_df.b0.item())
-            
-        if 'ustar_th_a' in stats_df:
-            zero_list.append(stats_df.a0.item())
-            cp_a = np.where(df.ustar == stats_df.ustar_th_a.item())[0].item()
-            NEE_at_cp_a = (stats_df.ustar_th_a.item() * stats_df.a1.item() + 
-                           stats_df.a0.item())
-            if 'ustar_th_a' in stats_df:            
-                plot_df['yHat_a'] = (plot_df.ustar * stats_df.a1.item() + 
-                                     stats_df.a0.item())
-                plot_df['yHat_a'].iloc[cp_a + 1:] = ((plot_df.ustar.iloc[cp_a + 1:] -
-                                                      stats_df.ustar_th_a.item()) *
-                                                     stats_df.a2.item() + 
-                                                     NEE_at_cp_a)
-        plot_df.loc[-1] = zero_list
-        plot_df.index = plot_df.index + 1
-        plot_df = plot_df.sort_index()
-        fig, ax = plt.subplots(1, 1, figsize = (14, 8))
-        ax.set_xlim([0, plot_df.ustar.max() * 1.05])
-        ax.spines['right'].set_visible(False)
-        ax.spines['top'].set_visible(False)
-        ax.tick_params(axis = 'y', labelsize = 14)
-        ax.tick_params(axis = 'x', labelsize = 14)
-        fig.patch.set_facecolor('white')
-        ax.set_xlabel('$u*\/(m\/s^{-1}$)', fontsize = 16)
-        ax.set_ylabel('$NEE\/(\mu mol C\/m^{-2} s^{-1}$)', fontsize = 16)
-        ax.axhline(0, color = 'black', lw = 0.5)
-        ax.plot(plot_df.ustar, plot_df.Fc, 'bo', label = 'observational data')
-        if 'ustar_th_b' in stats_df:
-            ax.plot(plot_df.ustar, plot_df.yHat_b, color = 'red', 
-                    label = 'operational model')
-        if 'ustar_th_a' in stats_df:
-            ax.plot(plot_df.ustar, plot_df.yHat_a, color = 'green',
-                    label = 'diagnostic model')
-        ax.legend(loc = (0.05, 0.85), fontsize = 12, frameon = False)
-        return
-    #--------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
-#def fit(self, sample_df):
 def fit(sample_df):
     
     def a_model_statistics(cp):
@@ -379,7 +329,6 @@ def fit(sample_df):
     else:
         for var in ['ustar_th_b', 'b0', 'b1']:
             d[var] = np.nan
-
 
     return d
 #------------------------------------------------------------------------------
@@ -465,6 +414,60 @@ def f_test(f_max, n, model):
         p = PchipInterpolator(f_crit_vals, 
                               (1 - np.array(cols)).tolist())(f_max)
     return p
+#------------------------------------------------------------------------------
+
+#--------------------------------------------------------------------------
+def plot_fit(df):
+    
+    plot_df = df.copy().reset_index(drop = True)
+    stats_df = pd.DataFrame(fit(df), index = [0])
+    if stats_df.empty:
+        raise RuntimeError('Could not find a valid changepoint for this '
+                           'sample')
+    zero_list = [np.nan, 0, np.nan]
+    if 'ustar_th_b' in stats_df:
+        zero_list.append(stats_df.b0.item())
+        cp_b = np.where(df.ustar == stats_df.ustar_th_b.item())[0].item()
+        plot_df['yHat_b'] = (stats_df.ustar_th_b.item() * stats_df.b1.item() + 
+                             stats_df.b0.item())
+        plot_df['yHat_b'].iloc[:cp_b] = (plot_df.ustar.iloc[:cp_b] * 
+                                         stats_df.b1.item() +
+                                         stats_df.b0.item())
+        
+    if 'ustar_th_a' in stats_df:
+        zero_list.append(stats_df.a0.item())
+        cp_a = np.where(df.ustar == stats_df.ustar_th_a.item())[0].item()
+        NEE_at_cp_a = (stats_df.ustar_th_a.item() * stats_df.a1.item() + 
+                       stats_df.a0.item())
+        if 'ustar_th_a' in stats_df:            
+            plot_df['yHat_a'] = (plot_df.ustar * stats_df.a1.item() + 
+                                 stats_df.a0.item())
+            plot_df['yHat_a'].iloc[cp_a + 1:] = ((plot_df.ustar.iloc[cp_a + 1:] -
+                                                  stats_df.ustar_th_a.item()) *
+                                                 stats_df.a2.item() + 
+                                                 NEE_at_cp_a)
+    plot_df.loc[-1] = zero_list
+    plot_df.index = plot_df.index + 1
+    plot_df = plot_df.sort_index()
+    fig, ax = plt.subplots(1, 1, figsize = (14, 8))
+    ax.set_xlim([0, plot_df.ustar.max() * 1.05])
+    ax.spines['right'].set_visible(False)
+    ax.spines['top'].set_visible(False)
+    ax.tick_params(axis = 'y', labelsize = 14)
+    ax.tick_params(axis = 'x', labelsize = 14)
+    fig.patch.set_facecolor('white')
+    ax.set_xlabel('$u*\/(m\/s^{-1}$)', fontsize = 16)
+    ax.set_ylabel('$NEE\/(\mu mol C\/m^{-2} s^{-1}$)', fontsize = 16)
+    ax.axhline(0, color = 'black', lw = 0.5)
+    ax.plot(plot_df.ustar, plot_df.Fc, 'bo', label = 'observational data')
+    if 'ustar_th_b' in stats_df:
+        ax.plot(plot_df.ustar, plot_df.yHat_b, color = 'red', 
+                label = 'operational model')
+    if 'ustar_th_a' in stats_df:
+        ax.plot(plot_df.ustar, plot_df.yHat_a, color = 'green',
+                label = 'diagnostic model')
+    ax.legend(loc = (0.05, 0.85), fontsize = 12, frameon = False)
+    return
 #------------------------------------------------------------------------------
 
 # Plot PDF of u* values and write to specified folder           

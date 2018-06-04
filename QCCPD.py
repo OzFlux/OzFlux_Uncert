@@ -29,7 +29,7 @@ class change_point_detect(object):
         self.interval = interval
         self.season_n = 1000 if interval == 30 else 600
         self.bin_n = 5 if interval == 30 else 3
-        self.years_list = sorted(list(set(dataframe.index.year)))
+        self.valid_years_list = self._get_valid_years()
 #------------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
@@ -65,7 +65,7 @@ class change_point_detect(object):
         stats_lst = []
         trials_lst = []
         print 'Getting change points for year:'        
-        for year in self.years_list:
+        for year in self.valid_years_list:
             print '    {}'.format(str(year)),
             results_dict = self.get_change_points_for_year(year, n_trials)
             if results_dict:
@@ -81,11 +81,6 @@ class change_point_detect(object):
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-
-    # Build in a check for whether is enough data BEFORE the shuffle, otherwise
-    # every trial will be executed even when there is insufficient data (do we
-    # need to trap edge case where there is enough data before reshuffle, but
-    # slightly less than enough after? Probably not!
     def get_change_points_for_year(self, year, n_trials):
         
         if not self.resample:
@@ -108,8 +103,21 @@ class change_point_detect(object):
         print 'Done!'
         results_df = pd.concat(data_list)
         return self._cross_sample_stats_QC(results_df)
-    #--------------------------------------------------------------------------    
-
+    #--------------------------------------------------------------------------
+    
+    #--------------------------------------------------------------------------
+    def _get_valid_years(self):
+        
+        l = []
+        for year in sorted(list(set(self.df.index.year))):
+            try:
+                self._get_sample_data(self.df.loc[str(year)])
+                l.append(year)
+            except RuntimeError:
+                continue
+        return l
+    #--------------------------------------------------------------------------
+    
     #--------------------------------------------------------------------------
     def _get_sample_data(self, df):
         
@@ -137,10 +145,10 @@ class change_point_detect(object):
         years_lst = []
         if year: 
             assert isinstance(year, int)
-            assert year in self.years_list
+            assert year in self.valid_years_list
             years = [year]
         else:
-            years = self.years_list
+            years = self.valid_years_list
         for year in years:
             df = self._get_sample_data(self.df.loc[str(year)])
             df['Year'] = year
@@ -192,10 +200,10 @@ class change_point_detect(object):
         years_lst = []
         if year: 
             assert isinstance(year, int)
-            assert year in self.years_list
+            assert year in self.valid_years_list
             years = [year]
         else:
-            years = self.years_list
+            years = self.valid_years_list
         for year in years:
             df = self._get_sample_data(self.df.loc[str(year)])
             df['Year'] = year            

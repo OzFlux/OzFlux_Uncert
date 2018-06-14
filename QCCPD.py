@@ -8,21 +8,29 @@ import pandas as pd
 from scipy import stats
 import os
 from scipy.interpolate import PchipInterpolator
-import pdb
+
+import utils
 
 #------------------------------------------------------------------------------
 # Class init
 #------------------------------------------------------------------------------
 class change_point_detect(object):
-    
-    def __init__(self, dataframe, resample = True, write_dir = None, 
-                 insolation_threshold = 10, season_routine = 'barr'):
+    '''
+    Put docstring in here
+    '''
+    def __init__(self, dataframe, resample = True, names_dict = False, 
+                 insolation_threshold = 10, season_routine = 'standard'):
 
-        self.df = dataframe
         interval = int(filter(lambda x: x.isdigit(), 
-                              pd.infer_freq(self.df.index)))
+                              pd.infer_freq(dataframe.index)))
         assert interval % 30 == 0
         assert season_routine in ['standard', 'barr']
+        if not names_dict: 
+            self.external_names = self._define_default_external_names()
+        else:
+            self.external_names = names_dict
+        self.df = utils.rename_df(dataframe, self.external_names, 
+                                  self._define_default_internal_names())
         self.resample = resample
         self.insolation_threshold = insolation_threshold
         self.season_routine = season_routine
@@ -50,9 +58,9 @@ class change_point_detect(object):
                                                       (df.a0 + df.a1 * 
                                                        df.ustar_th_a))).median(),
                                  'ustar_mean': df.ustar_th_b.mean(),
-                                 'ustar_2sig': (df.ustar_th_b.std() * 
-                                                stats.t.isf(0.025, valid_n)),
-                                 'ustar_valid_n': valid_n},
+                                 'ustar_sig': df.ustar_th_b.std(),
+                                 'ustar_valid_n': valid_n,
+                                 'crit_t_value': stats.t.isf(0.025, valid_n)},
                                 index = [year])
         df = df[['b0', 'b1', 'ustar_th_b']].dropna()
         df.index = np.tile(year, len(df))
@@ -60,7 +68,26 @@ class change_point_detect(object):
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def get_change_points(self, n_trials = 1, keep_trial_results = False):
+    def _define_default_external_names(self):
+              
+        return {'flux_name': 'Fc',
+                'temperature_name': 'Ta',
+                'insolation_name': 'Fsd',
+                'friction_velocity_name': 'ustar'}
+    #--------------------------------------------------------------------------
+
+    #--------------------------------------------------------------------------
+    def _define_default_internal_names(self):
+
+        return {'flux_name': 'NEE',
+                'temperature_name': 'Ta',
+                'insolation_name': 'Fsd',
+                'friction_velocity_name': 'ustar'}
+    #--------------------------------------------------------------------------
+
+    #--------------------------------------------------------------------------
+    def get_change_points(self, n_trials = 1, write_to_dir = None,
+                          keep_trial_results = False):
 
         stats_lst = []
         trials_lst = []
@@ -77,6 +104,7 @@ class change_point_detect(object):
         output_dict = {'summary_statistics': pd.concat(stats_lst)}
         if keep_trial_results: 
             output_dict['trial_results'] = pd.concat(trials_lst)
+        if write_to_dir: self._write_to_file(output_dict, write_to_dir)
         return output_dict
     #--------------------------------------------------------------------------
 
@@ -122,7 +150,7 @@ class change_point_detect(object):
     def _get_sample_data(self, df):
         
         temp_df = df.loc[df['Fsd'] < self.insolation_threshold, 
-                         ['Fc', 'ustar', 'Ta']].dropna()
+                         ['NEE', 'ustar', 'Ta']].dropna()
         temp_df = temp_df[(temp_df.ustar >= 0) & (temp_df.ustar <= 3)]
         if len(temp_df) == 0:
             raise RuntimeError('No data available')
@@ -258,6 +286,16 @@ class change_point_detect(object):
         return d[self.season_routine]
     #--------------------------------------------------------------------------
 
+    #--------------------------------------------------------------------------
+    def _write_to_file(self, d, path_to_dir):
+        
+        if not os.path.isdir(path_to_dir): os.mkdir(path_to_dir)
+        path_file = os.path.join(path_to_dir, 'change_points.xlsx')
+        xlwriter = pd.ExcelWriter(path_file)
+        for key in sorted(d.keys()):
+            d[key].to_excel(xlwriter, sheet_name = key)
+    #--------------------------------------------------------------------------
+    
 #------------------------------------------------------------------------------
 def fit(sample_df):
     
@@ -270,10 +308,10 @@ def fit(sample_df):
         work_df['ustar_a2'] = (work_df['ustar'] - 
                                work_df['ustar'].iloc[cp]) * dummy_array
         reg_params = np.linalg.lstsq(work_df[['int','ustar_a1','ustar_a2']],
-                                     work_df['Fc'], rcond = None)[0]
+                                     work_df['NEE'], rcond = None)[0]
         yHat = (reg_params[0] + reg_params[1] * work_df['ustar_a1'] +
                 reg_params[2] * work_df['ustar_a2'])
-        SSE_full = ((work_df['Fc'] - yHat)**2).sum()
+        SSE_full = ((work_df['NEE'] - yHat)**2).sum()
         f_score = (SSE_null_a - SSE_full) / (SSE_full / (df_length - 3))
         return f_score, reg_params
     
@@ -282,9 +320,9 @@ def fit(sample_df):
         work_df['ustar_b'] = work_df['ustar']
         work_df['ustar_b'].iloc[cp + 1:] = work_df['ustar_b'].iloc[cp]
         reg_params = np.linalg.lstsq(work_df[['int','ustar_b']], 
-                                     work_df['Fc'], rcond = None)[0]
+                                     work_df['NEE'], rcond = None)[0]
         yHat = reg_params[0] + reg_params[1] * work_df['ustar_b']
-        SSE_full = ((work_df['Fc'] - yHat)**2).sum()
+        SSE_full = ((work_df['NEE'] - yHat)**2).sum()
         f_score = (SSE_null_b - SSE_full) / (SSE_full / (df_length - 2))
         return f_score, reg_params
     
@@ -297,10 +335,10 @@ def fit(sample_df):
     psig = 0.05
     
     # Calculate null model SSE for operational (b) and diagnostic (a) model
-    SSE_null_b = ((sample_df['Fc'] - sample_df['Fc'].mean())**2).sum()
+    SSE_null_b = ((sample_df['NEE'] - sample_df['NEE'].mean())**2).sum()
     alpha0 , alpha1 = stats.linregress(sample_df['ustar'], 
-                                       sample_df['Fc'])[:2]
-    SSE_null_a = ((sample_df['Fc'] - (sample_df['ustar'] * 
+                                       sample_df['NEE'])[:2]
+    SSE_null_a = ((sample_df['NEE'] - (sample_df['ustar'] * 
                                       alpha0 + alpha1))**2).sum()
     
     # Create arrays to hold statistics
@@ -467,7 +505,7 @@ def plot_fit(df):
     ax.set_xlabel('$u*\/(m\/s^{-1}$)', fontsize = 16)
     ax.set_ylabel('$NEE\/(\mu mol C\/m^{-2} s^{-1}$)', fontsize = 16)
     ax.axhline(0, color = 'black', lw = 0.5)
-    ax.plot(plot_df.ustar, plot_df.Fc, 'bo', label = 'observational data')
+    ax.plot(plot_df.ustar, plot_df.NEE, 'bo', label = 'observational data')
     if 'ustar_th_b' in stats_df:
         ax.plot(plot_df.ustar, plot_df.yHat_b, color = 'red', 
                 label = 'operational model')
@@ -478,27 +516,27 @@ def plot_fit(df):
     return
 #------------------------------------------------------------------------------
 
-# Plot PDF of u* values and write to specified folder           
-def plot_hist(S,mu,sig,crit_t,year,plot_out):
-    S=S.reset_index(drop=True)
-    x_low=S.min()-0.1*S.min()
-    x_high=S.max()+0.1*S.max()
-    x=np.linspace(x_low,x_high,100)
-    fig=plt.figure(figsize=(12,8))
-    fig.patch.set_facecolor('white')
-    plt.hist(S,normed=True)
-    plt.plot(x,mlab.normpdf(x,mu,sig),color='red',linewidth=2.5,label='Gaussian PDF')
-    plt.xlim(x_low,x_high)
-    plt.xlabel(r'u* ($m\/s^{-1}$)',fontsize=16)
-    plt.axvline(x=mu-sig*crit_t,color='black',linestyle='--')
-    plt.axvline(x=mu+sig*crit_t,color='black',linestyle='--')
-    plt.axvline(x=mu,color='black',linestyle='dotted')
-    props = dict(boxstyle='round,pad=1', facecolor='white', alpha=0.5)
-    txt='mean u*='+str(mu)
-    ax=plt.gca()
-    plt.text(0.4,0.1,txt,bbox=props,fontsize=12,verticalalignment='top',transform=ax.transAxes)
-    plt.legend(loc='upper left')
-    plt.title(str(year)+'\n')
-    plot_out_name='ustar'+str(year)+'.jpg'
-    fig.savefig(os.path.join(plot_out,plot_out_name))
-    plt.close(fig)
+## Plot PDF of u* values and write to specified folder           
+#def plot_hist(S,mu,sig,crit_t,year,plot_out):
+#    S=S.reset_index(drop=True)
+#    x_low=S.min()-0.1*S.min()
+#    x_high=S.max()+0.1*S.max()
+#    x=np.linspace(x_low,x_high,100)
+#    fig=plt.figure(figsize=(12,8))
+#    fig.patch.set_facecolor('white')
+#    plt.hist(S,normed=True)
+#    plt.plot(x,mlab.normpdf(x,mu,sig),color='red',linewidth=2.5,label='Gaussian PDF')
+#    plt.xlim(x_low,x_high)
+#    plt.xlabel(r'u* ($m\/s^{-1}$)',fontsize=16)
+#    plt.axvline(x=mu-sig*crit_t,color='black',linestyle='--')
+#    plt.axvline(x=mu+sig*crit_t,color='black',linestyle='--')
+#    plt.axvline(x=mu,color='black',linestyle='dotted')
+#    props = dict(boxstyle='round,pad=1', facecolor='white', alpha=0.5)
+#    txt='mean u*='+str(mu)
+#    ax=plt.gca()
+#    plt.text(0.4,0.1,txt,bbox=props,fontsize=12,verticalalignment='top',transform=ax.transAxes)
+#    plt.legend(loc='upper left')
+#    plt.title(str(year)+'\n')
+#    plot_out_name='ustar'+str(year)+'.jpg'
+#    fig.savefig(os.path.join(plot_out,plot_out_name))
+#    plt.close(fig)

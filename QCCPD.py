@@ -16,9 +16,34 @@ import utils
 #------------------------------------------------------------------------------
 class change_point_detect(object):
     '''
-    Put docstring in here
+    Class that determines change points for CO2 flux as function of u*
+    
+    Args:
+        * dataframe (pandas dataframe): dataframe containing the data for 
+          analysis (must contain series of insolation, friction velocity,
+          temperature and CO2 flux); note that NO qc of any kind is done - 
+          nan values are handled, but processing is otherwise naive
+        * resample (bool, default True): randomly resamples the data if set to 
+          true (if set to false, the capacity to run multiple trials is 
+          disabled, since they are redundandt with resampling)
+        * names_dict (python dict or None): dictionary containing the names of 
+          the required variables (see above) - must have the following 
+          structure:| 
+          | {'flux_name': <name>,
+           'temperature_name': <name>,
+           'insolation_name': <name>,
+           'friction_velocity_name': <name>}
+          If None is passed, the default dictionary is used for external names,
+          as follows:
+              
+          {'flux_name': 'Fc',
+           'temperature_name': 'Ta',
+           'insolation_name': 'Fsd',
+           'friction_velocity_name': 'ustar'}
+        * insolation_threshold (int or float): threshold light level for 
+          filtering day and night conditions
     '''
-    def __init__(self, dataframe, resample = True, names_dict = False, 
+    def __init__(self, dataframe, resample = True, names_dict = None, 
                  insolation_threshold = 10, season_routine = 'standard'):
 
         interval = int(filter(lambda x: x.isdigit(), 
@@ -172,7 +197,7 @@ class change_point_detect(object):
         # then; 5) concatenate
         years_lst = []
         if year: 
-            assert isinstance(year, int)
+            assert isinstance(year, (int, long))
             assert year in self.valid_years_list
             years = [year]
         else:
@@ -227,7 +252,7 @@ class change_point_detect(object):
         # then; 5) concatenate
         years_lst = []
         if year: 
-            assert isinstance(year, int)
+            assert isinstance(year, (int, long))
             assert year in self.valid_years_list
             years = [year]
         else:

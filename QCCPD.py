@@ -8,6 +8,7 @@ import pandas as pd
 from scipy import stats
 import os
 from scipy.interpolate import PchipInterpolator
+import pdb
 
 import utils
 
@@ -28,14 +29,13 @@ class change_point_detect(object):
           disabled, since they are redundandt with resampling)
         * names_dict (python dict or None): dictionary containing the names of 
           the required variables (see above) - must have the following 
-          structure:| 
-          | {'flux_name': <name>,
+          structure: \n
+          {'flux_name': <name>,
            'temperature_name': <name>,
            'insolation_name': <name>,
            'friction_velocity_name': <name>}
           If None is passed, the default dictionary is used for external names,
-          as follows:
-              
+          as follows: \n  
           {'flux_name': 'Fc',
            'temperature_name': 'Ta',
            'insolation_name': 'Fsd',
@@ -68,28 +68,34 @@ class change_point_detect(object):
     #--------------------------------------------------------------------------
     def _cross_sample_stats_QC(self, df):
         
-        year = np.unique(df.index.get_level_values(0)).item()
         d_mode = len(df.loc[df.b1 > 0, 'b1'])
         e_mode = len(df.loc[df.b1 < 0, 'b1'])
         if e_mode > d_mode:
             df.loc[df.b1 > 0, ['ustar_th_b', 'b0', 'b1']] = np.nan
         else:
             df.loc[df.b1 < 0, ['ustar_th_b', 'b0', 'b1']] = np.nan
+        year = np.unique(df.index.get_level_values(0)).item()
         valid_n = df.ustar_th_b.count()
-        stats_df = pd.DataFrame({'norm_a1': (df.a1 * (df.ustar_th_a / 
-                                                      (df.a0 + df.a1 * 
-                                                       df.ustar_th_a))).median(),
-                                 'norm_a2': (df.a2 * (df.ustar_th_a / 
-                                                      (df.a0 + df.a1 * 
-                                                       df.ustar_th_a))).median(),
+        norm_a1 = ((df.a1 * (df.ustar_th_a / (df.a0 + df.a1 * df.ustar_th_a)))
+                   .median())
+        norm_a2 = ((df.a2 * (df.ustar_th_a / (df.a0 + df.a1 * df.ustar_th_a)))
+                   .median())
+        stats_df = pd.DataFrame({'norm_a1': norm_a1,
+                                 'norm_a2': norm_a2,
                                  'ustar_mean': df.ustar_th_b.mean(),
-                                 'ustar_sig': df.ustar_th_b.std(),
-                                 'ustar_valid_n': valid_n,
-                                 'crit_t_value': stats.t.isf(0.025, valid_n)},
-                                index = [year])
-        df = df[['b0', 'b1', 'ustar_th_b']].dropna()
-        df.index = np.tile(year, len(df))
-        return {'trial_results': df, 'summary_statistics': stats_df}
+                                 'ustar_std': df.ustar_th_b.std(),
+                                 'valid_n': valid_n}, index = [year])
+        stats_df.index.name = 'Year'
+        df = df[['b0', 'b1', 'ustar_th_b', 'bootstrap_n']].dropna()
+        df.reset_index(inplace = True)
+        df.drop(['Season', 'T_class'], axis = 1, inplace = True)
+        mean_df = df.groupby(['Year', 'bootstrap_n']).mean()
+        mean_df['ustar_std'] = (df.groupby(['Year', 'bootstrap_n']).std()
+                                ['ustar_th_b'])
+        mean_df['valid_n'] = (df.groupby(['Year', 'bootstrap_n']).count()
+                              ['ustar_th_b'])
+        mean_df.columns = ['b0', 'b1', 'ustar_mean', 'ustar_std', 'valid_n']
+        return {'trial_results': mean_df, 'summary_statistics': stats_df}
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
@@ -111,8 +117,7 @@ class change_point_detect(object):
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def get_change_points(self, n_trials = 1, write_to_dir = None,
-                          keep_trial_results = False):
+    def get_change_points(self, n_trials = 1, write_to_dir = None):
 
         stats_lst = []
         trials_lst = []
@@ -126,9 +131,8 @@ class change_point_detect(object):
         if not stats_lst:
             print 'Could not find any valid change points!'
             return
-        output_dict = {'summary_statistics': pd.concat(stats_lst)}
-        if keep_trial_results: 
-            output_dict['trial_results'] = pd.concat(trials_lst)
+        output_dict = {'summary_statistics': pd.concat(stats_lst),
+                       'trial_results': pd.concat(trials_lst)}
         if write_to_dir: self._write_to_file(output_dict, write_to_dir)
         return output_dict
     #--------------------------------------------------------------------------
@@ -146,13 +150,13 @@ class change_point_detect(object):
         season_func = self._get_season_function()
         for trial in xrange(n_trials):
             print str(trial + 1),
-            try: df = season_func(year)
-            except RuntimeError: continue
+            df = season_func(year)
             idx = df.groupby(['Year', 'Season', 'T_class']).mean().index
             results_df = pd.DataFrame(map(lambda x: 
                                           fit(df.loc[x]), idx),
                                       index = idx)
             data_list.append(results_df)
+            results_df['bootstrap_n'] = trial
         print 'Done!'
         results_df = pd.concat(data_list)
         return self._cross_sample_stats_QC(results_df)
@@ -268,6 +272,7 @@ class change_point_detect(object):
                             * self.bin_n * 4)
             n_per_Tclass = n_per_season / 4
             n_bins = n_per_Tclass / self.bin_n
+            pdb.set_trace()
             T_array = np.concatenate(map(lambda x: np.tile(x, n_per_Tclass), 
                                          range(4)))
             bin_array = np.tile(np.concatenate(map(lambda x: np.tile(x, self.bin_n), 
@@ -318,7 +323,10 @@ class change_point_detect(object):
         path_file = os.path.join(path_to_dir, 'change_points.xlsx')
         xlwriter = pd.ExcelWriter(path_file)
         for key in sorted(d.keys()):
-            d[key].to_excel(xlwriter, sheet_name = key)
+            try:
+                d[key].to_excel(xlwriter, sheet_name = key)
+            except:
+                pdb.set_trace()
     #--------------------------------------------------------------------------
     
 #------------------------------------------------------------------------------
@@ -540,28 +548,3 @@ def plot_fit(df):
     ax.legend(loc = (0.05, 0.85), fontsize = 12, frameon = False)
     return
 #------------------------------------------------------------------------------
-
-## Plot PDF of u* values and write to specified folder           
-#def plot_hist(S,mu,sig,crit_t,year,plot_out):
-#    S=S.reset_index(drop=True)
-#    x_low=S.min()-0.1*S.min()
-#    x_high=S.max()+0.1*S.max()
-#    x=np.linspace(x_low,x_high,100)
-#    fig=plt.figure(figsize=(12,8))
-#    fig.patch.set_facecolor('white')
-#    plt.hist(S,normed=True)
-#    plt.plot(x,mlab.normpdf(x,mu,sig),color='red',linewidth=2.5,label='Gaussian PDF')
-#    plt.xlim(x_low,x_high)
-#    plt.xlabel(r'u* ($m\/s^{-1}$)',fontsize=16)
-#    plt.axvline(x=mu-sig*crit_t,color='black',linestyle='--')
-#    plt.axvline(x=mu+sig*crit_t,color='black',linestyle='--')
-#    plt.axvline(x=mu,color='black',linestyle='dotted')
-#    props = dict(boxstyle='round,pad=1', facecolor='white', alpha=0.5)
-#    txt='mean u*='+str(mu)
-#    ax=plt.gca()
-#    plt.text(0.4,0.1,txt,bbox=props,fontsize=12,verticalalignment='top',transform=ax.transAxes)
-#    plt.legend(loc='upper left')
-#    plt.title(str(year)+'\n')
-#    plot_out_name='ustar'+str(year)+'.jpg'
-#    fig.savefig(os.path.join(plot_out,plot_out_name))
-#    plt.close(fig)

@@ -287,10 +287,7 @@ class change_point_detect(object):
                 this_df = df.iloc[start_ind: end_ind].copy()
                 this_df.sort_values('Ta', axis = 0, inplace = True)
                 this_df['Season'] = season + 1
-                try:
-                    this_df['T_class'] = T_array
-                except:
-                    pdb.set_trace()
+                this_df['T_class'] = T_array
                 this_df = pd.concat(map(lambda x: 
                                         this_df.loc[this_df.T_class == x]
                                         .sort_values('ustar', axis = 0), 

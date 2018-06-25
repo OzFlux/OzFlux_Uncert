@@ -265,25 +265,32 @@ class change_point_detect(object):
             df = self._get_sample_data(self.df.loc[str(year)])
             df['Year'] = year            
             seasons_lst = []
-            df = pd.concat([df.loc[df.index.dayofyear >= 336], 
-                            df.loc[df.index.dayofyear < 336]])
-            n_seasons = len(df) / self.season_n
-            n_per_season = (len(df) / (n_seasons * self.bin_n * 4)  
-                            * self.bin_n * 4)
+            n_seasons = len(df) * 2 / self.season_n - 1
+            n_round = (n_seasons + 1) * (self.season_n / 2)
+            remain = len(df) % n_round
+            min_extra_per_season = self.bin_n * 4
+            min_extra_all_seasons = ((n_seasons - 1) * 
+                                     (min_extra_per_season / 2) + 
+                                     (min_extra_per_season))
+            extra_per_season = (remain / min_extra_all_seasons * 
+                                min_extra_per_season)
+            n_per_season = self.season_n + extra_per_season
             n_per_Tclass = n_per_season / 4
             n_bins = n_per_Tclass / self.bin_n
-            pdb.set_trace()
             T_array = np.concatenate(map(lambda x: np.tile(x, n_per_Tclass), 
                                          range(4)))
             bin_array = np.tile(np.concatenate(map(lambda x: np.tile(x, self.bin_n), 
                                                    range(n_bins))), 4)
             for season in xrange(n_seasons):
-                start_ind = season * n_per_season
-                end_ind = start_ind + n_per_season
+                start_ind = season * (n_per_season / 2)
+                end_ind = season * (n_per_season / 2) + n_per_season
                 this_df = df.iloc[start_ind: end_ind].copy()
                 this_df.sort_values('Ta', axis = 0, inplace = True)
                 this_df['Season'] = season + 1
-                this_df['T_class'] = T_array
+                try:
+                    this_df['T_class'] = T_array
+                except:
+                    pdb.set_trace()
                 this_df = pd.concat(map(lambda x: 
                                         this_df.loc[this_df.T_class == x]
                                         .sort_values('ustar', axis = 0), 

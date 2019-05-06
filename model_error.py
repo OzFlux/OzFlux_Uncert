@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+import pdb
+
 import utils
 reload(utils)
 
@@ -157,7 +159,7 @@ class model_error(object):
         ax.xaxis.set_ticks_position('bottom')    
         ax.spines['right'].set_visible(False)
         ax.spines['top'].set_visible(False)
-        ax.hist(trials, bins = 100, normed = True)
+        ax.hist(trials, bins = 100, density = True)
         ax.plot(x, y, color = 'red', linewidth = 2.5, label = 'Gaussian PDF')
         ax.axvline(mu, color = 'black', lw = 0.75)
         ax.axvline(mu - sig * crit_t, color = 'black', ls = '-.', lw = 0.75)
@@ -187,7 +189,7 @@ class model_error(object):
         for this_trial in xrange(n_trials):
             error_list.append(self.estimate_model_error())
         if not return_trials:
-            np.array(error_list).std() * crit_t
+            return np.array(error_list).std() * crit_t
         else:
             return np.array(error_list).std() * crit_t, error_list
     #--------------------------------------------------------------------------

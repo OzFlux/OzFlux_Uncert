@@ -80,72 +80,85 @@ class random_error(object):
               and corresponding sigma_delta estimate.
         """
 
-        #----------------------------------------------------------------------
-        # Bin day and night data
-        def bin_time_series():
+    #----------------------------------------------------------------------
+    # Bin day and night data
+    def bin_time_series(mode):
 
-            def get_sigmas(df):
-                def calc(s):
-                    return abs(s - s.mean()).mean() * np.sqrt(2)
-                return pd.DataFrame({'sigma_delta':
-                                      [calc(df.loc[df['quantile_label'] == x,
-                                                      'flux_diff']) for x in df['quantile_label'].unique()
-                                          .categories],
-                                     'mean':
-                                      [df.loc[df['quantile_label'] == x,
-                                                 'flux_mean'].mean() for x in df['quantile_label'].unique()
-                                          .categories]})
+        try: assert mode in ['day', 'night']
+        except AssertionError: raise KeyError('"Mode" kwarg must be either '
+                                              '"day" or "night"')
 
-            noct_df = filter_df.loc[filter_df.Fsd_mean < self.noct_threshold,
-                                    ['flux_mean', 'flux_diff']]
-            day_df = filter_df.loc[filter_df.Fsd_mean > self.noct_threshold,
-                                   ['flux_mean', 'flux_diff']]
+        def get_sigmas(df):
+            def calc(s):
+                return abs(s - s.mean()).mean() * np.sqrt(2)
+            return pd.DataFrame({'sigma_delta':
+                                  [calc(df.loc[df['quantile_label'] == x,
+                                                  'flux_diff']) for x in df['quantile_label'].unique()
+                                      .categories],
+                                 'mean':
+                                  [df.loc[df['quantile_label'] == x,
+                                             'flux_mean'].mean() for x in df['quantile_label'].unique()
+                                      .categories]})
 
-            nocturnal_propn = float(len(noct_df)) / len(filter_df)
-            num_cats_night = int(round(self.num_bins * nocturnal_propn))
-            num_cats_day = self.num_bins - num_cats_night
+        if mode == 'day':
 
-            noct_df['quantile_label'] = pd.qcut(noct_df.flux_mean, num_cats_night,
-                                                labels = np.arange(num_cats_night))
-            noct_group_df = get_sigmas(noct_df)
 
-            day_df['quantile_label'] = pd.qcut(day_df.flux_mean, num_cats_day,
-                                               labels = np.arange(num_cats_day))
-            day_group_df = get_sigmas(day_df)
 
-            return day_group_df, noct_group_df
-        #----------------------------------------------------------------------
+        noct_df = filter_df.loc[filter_df.Fsd_mean < self.noct_threshold,
+                                ['flux_mean', 'flux_diff']]
+        day_df = filter_df.loc[filter_df.Fsd_mean > self.noct_threshold,
+                               ['flux_mean', 'flux_diff']]
 
-        #----------------------------------------------------------------------
-        def difference_time_series():
-            diff_df = pd.DataFrame(index = self.df.index)
-            for var in ['flux', 'Ta', 'Fsd', 'Ws']:
-                var_name = var + '_diff'
-                temp = self.df[var] - self.df[var].shift(self.recs_per_day)
-                diff_df[var_name] = temp if var == 'flux' else abs(temp)
-            diff_df['flux_mean'] = (self.df['flux_mean'] + self.df['flux_mean']
-                                    .shift(self.recs_per_day)) / 2
-            diff_df['Fsd_mean'] = (self.df['Fsd'] +
-                                   self.df['Fsd'].shift(self.recs_per_day)) / 2
-            return diff_df
-        #----------------------------------------------------------------------
+        nocturnal_propn = float(len(noct_df)) / len(filter_df)
+        num_cats_night = int(round(self.num_bins * nocturnal_propn))
+        num_cats_day = self.num_bins - num_cats_night
 
-        #----------------------------------------------------------------------
-        def filter_time_series():
-            bool_s = ((diff_df['Ws_diff'] < self.ws_threshold) &
-                      (diff_df['Ta_diff'] < self.t_threshold) &
-                      (diff_df['Fsd_diff'] < self.k_threshold))
-            return pd.DataFrame({var: diff_df[var][bool_s] for var in
-                                 ['flux_diff', 'flux_mean',
-                                  'Fsd_mean']}).dropna()
-        #----------------------------------------------------------------------
+        noct_df['quantile_label'] = pd.qcut(noct_df.flux_mean, num_cats_night,
+                                            labels = np.arange(num_cats_night))
+        noct_group_df = get_sigmas(noct_df)
+
+        day_df['quantile_label'] = pd.qcut(day_df.flux_mean, num_cats_day,
+                                           labels = np.arange(num_cats_day))
+        day_group_df = get_sigmas(day_df)
+
+        return day_group_df, noct_group_df
+    #----------------------------------------------------------------------
+
+    #--------------------------------------------------------------------------
+    def get_differenced_time_series(self, keep_met_diffs=False):
+
+        """
+        Returns the day-differenced time series with cases that fell outside
+        meteorological constraints - or nans - dropped
+
+        Args:
+            * keep_met_diffs (bool): returns the differences in the
+              meteorological constraints if true, otherwise they're dropped
+        """
+
+        diff_df = pd.DataFrame(index = self.df.index)
+        for var in ['flux', 'Ta', 'Fsd', 'Ws']:
+            var_name = var + '_diff'
+            temp = self.df[var] - self.df[var].shift(self.recs_per_day)
+            diff_df[var_name] = temp if var == 'flux' else abs(temp)
+        diff_df['flux_mean'] = (self.df['flux_mean'] + self.df['flux_mean']
+                                .shift(self.recs_per_day)) / 2
+        diff_df['Fsd_mean'] = (self.df['Fsd'] +
+                               self.df['Fsd'].shift(self.recs_per_day)) / 2
+        keep_bool = ((diff_df['Ws_diff'] < self.ws_threshold) &
+                     (diff_df['Ta_diff'] < self.t_threshold) &
+                     (diff_df['Fsd_diff'] < self.k_threshold))
+        diff_df = diff_df.loc[keep_bool].dropna()
+        if keep_met_diffs: return diff_df
+        return diff_df[['flux_diff', 'flux_mean', 'Fsd_mean']].dropna()
+    #--------------------------------------------------------------------------
+
 
         #----------------------------------------------------------------------
         # Main routine
         #----------------------------------------------------------------------
 
         diff_df = difference_time_series()
-        filter_df = filter_time_series()
         day_df, noct_df = bin_time_series()
         return {'day': day_df, 'night': noct_df}
 

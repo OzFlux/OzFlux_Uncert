@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 # Python modules
+import dask
 import matplotlib.pyplot as plt
 import matplotlib.mlab as mlab
 import numpy as np
@@ -9,6 +10,7 @@ from scipy import stats
 import os
 from scipy.interpolate import PchipInterpolator
 import pdb
+import time
 
 import utils
 
@@ -231,7 +233,9 @@ def _a_model(x, y, cp, null_SSE):
     yHat = reg_params[0] + reg_params[1] * x_a1 + reg_params[2] * x_a2
     SSE_full = ((y - yHat)**2).sum()
     f_score = (null_SSE - SSE_full) / (SSE_full / (len(x) - 3))
-    return f_score, reg_params
+    # pdb.set_trace()
+    return np.concatenate([[f_score], reg_params])
+    # return f_score, reg_params
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
@@ -423,15 +427,20 @@ def fit_function(data_array, psig=0.05):
     # associated change point and threshold value
 
     # A model
-    f_list, stats_list = [], []
+    lazy_results = []
+    # start=time.time()
     for this_cp in range(iter_range[0], iter_range[1]):
-        f, stats = _a_model(x_array, y_array, this_cp, SSE_null_a)
-        f_list.append(f), stats_list.append(stats)
-    fmax_a, cp_a = np.array(f_list).max(), int(np.array(f_list).argmax())
+        lazy_result = dask.delayed(_a_model)(x_array, y_array, this_cp, SSE_null_a)
+        lazy_results.append(lazy_result)
+    results = np.array(dask.compute(*lazy_results))
+    # end=time.time()
+    # print ('Time taken is {}'.format(end-start))
+    fmax_a = results[:, 0].max()
     p_a = f_test(fmax_a, n_cases, model = 'a')
     if p_a < psig:
+        cp_a = int(results[:, 0].argmax())
         a_dict = {'ustar_th_a': x_array[cp_a + iter_range[0]]}
-        a_dict.update(dict(zip(['a0', 'a1', 'a2'], stats_list[cp_a])))
+        a_dict.update(dict(zip(['a0', 'a1', 'a2'], results[cp_a, 1:])))
     else:
         a_dict = {var: np.nan for var in ['ustar_th_a', 'a0', 'a1', 'a2']}
 

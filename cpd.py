@@ -428,13 +428,14 @@ def fit_function(data_array, psig=0.05):
 
     # A model
     lazy_results = []
-    # start=time.time()
+    start=time.time()
     for this_cp in range(iter_range[0], iter_range[1]):
         lazy_result = dask.delayed(_a_model)(x_array, y_array, this_cp, SSE_null_a)
         lazy_results.append(lazy_result)
     results = np.array(dask.compute(*lazy_results))
-    # end=time.time()
-    # print ('Time taken is {}'.format(end-start))
+    end=time.time()
+    print ('Time taken is {}'.format(end-start))
+    pdb.set_trace()
     fmax_a = results[:, 0].max()
     p_a = f_test(fmax_a, n_cases, model = 'a')
     if p_a < psig:

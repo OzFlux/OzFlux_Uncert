@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 
 # Python modules
-import dask
 import matplotlib.pyplot as plt
 import matplotlib.mlab as mlab
 import numpy as np
@@ -9,13 +8,15 @@ import pandas as pd
 from scipy import stats
 import os
 from scipy.interpolate import PchipInterpolator
+import xarray as xr
 import pdb
-import time
 
 import utils
 
 #------------------------------------------------------------------------------
-# Class init
+### CLASSES ###
+#------------------------------------------------------------------------------
+
 #------------------------------------------------------------------------------
 class change_point_detect(object):
 
@@ -90,7 +91,7 @@ class change_point_detect(object):
         if not resample: n_trials = 1
         if write_to_dir: _check_path_exists(write_to_dir)
         df_list = []
-        year_stats = self.get_season_stats(years=years, passed_years_only=True)
+        year_stats = self.get_season_stats(years=years, valid_years_only=True)
         if not year_stats: return
         print('Getting change points for year:')
         for year in year_stats.keys():
@@ -133,7 +134,7 @@ class change_point_detect(object):
                  T class) containing ustar and NEE data
         """
 
-        year_stats = self.get_season_stats(years=years, passed_years_only=True)
+        year_stats = self.get_season_stats(years=years, valid_years_only=True)
         if not year_stats: return
         df_list = []
         for this_year in year_stats.keys():
@@ -151,14 +152,14 @@ class change_point_detect(object):
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def get_season_stats(self, years=None, passed_years_only=False):
+    def get_season_stats(self, years=None, valid_years_only=False):
 
         """Get statistics of data availability for each year
            Args:
                * years (list), default None: list of requested years
                  (data will only be returned for years with valid data);
                  default returns all eligible years
-               * passed_years_only (boolean), default False: whether to include
+               * valid_years_only (boolean), default False: whether to include
                  the statistical analysis results for years that either have no
                  or insufficient valid data
            Returns:
@@ -196,7 +197,7 @@ class change_point_detect(object):
             except KeyError:
                 no_stats_dict[str(year)] = {'valid_data': 'False'}
                 print('No valid data for year {}'.format(str(year)))
-        if passed_years_only:
+        if valid_years_only:
             if len(stats_dict) == 0: return
             return stats_dict
         stats_dict.update(no_stats_dict)
@@ -217,6 +218,23 @@ class change_point_detect(object):
     #--------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
+
+# #------------------------------------------------------------------------------
+# class change_point_detect_from_netcdf(change_point_detect):
+
+#     def __init__(self, dataframe, missing_data=-9999, names_dict=None,
+#                  insolation_threshold=10, minimum_annual_n=None,
+#                  write_to_nc_attrs=False):
+#         change_point_detect.__init__(self, dataframe, missing_data=-9999,
+#                                      names_dict=None, insolation_threshold=10,
+#                                      minimum_annual_n=None)
+
+#         self.ds = xr.open_dataset(dataframe)
+#         # dataframe = ds.to_dataframe()
+#         # dataframe.index = dataframe.index.droplevel([0,1])
+# #------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
 ### FUNCTIONS ###
 #------------------------------------------------------------------------------
 
@@ -233,9 +251,7 @@ def _a_model(x, y, cp, null_SSE):
     yHat = reg_params[0] + reg_params[1] * x_a1 + reg_params[2] * x_a2
     SSE_full = ((y - yHat)**2).sum()
     f_score = (null_SSE - SSE_full) / (SSE_full / (len(x) - 3))
-    # pdb.set_trace()
     return np.concatenate([[f_score], reg_params])
-    # return f_score, reg_params
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
@@ -248,7 +264,7 @@ def _b_model(x, y, cp, null_SSE):
     yHat = reg_params[0] + reg_params[1] * x_b
     full_SSE = ((y - yHat)**2).sum()
     f_score = (null_SSE - full_SSE) / (full_SSE / (len(x) - 2))
-    return f_score, reg_params
+    return np.concatenate([[f_score], reg_params])
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
@@ -427,15 +443,8 @@ def fit_function(data_array, psig=0.05):
     # associated change point and threshold value
 
     # A model
-    lazy_results = []
-    start=time.time()
-    for this_cp in range(iter_range[0], iter_range[1]):
-        lazy_result = dask.delayed(_a_model)(x_array, y_array, this_cp, SSE_null_a)
-        lazy_results.append(lazy_result)
-    results = np.array(dask.compute(*lazy_results))
-    end=time.time()
-    print ('Time taken is {}'.format(end-start))
-    pdb.set_trace()
+    results = np.array([_a_model(x_array, y_array, this_cp, SSE_null_a)
+                        for this_cp in range(iter_range[0], iter_range[1])])
     fmax_a = results[:, 0].max()
     p_a = f_test(fmax_a, n_cases, model = 'a')
     if p_a < psig:
@@ -446,15 +455,14 @@ def fit_function(data_array, psig=0.05):
         a_dict = {var: np.nan for var in ['ustar_th_a', 'a0', 'a1', 'a2']}
 
     # B model
-    f_list, stats_list = [], []
-    for this_cp in range(iter_range[0], iter_range[1]):
-        f, stats = _b_model(x_array, y_array, this_cp, SSE_null_b)
-        f_list.append(f), stats_list.append(stats)
-    fmax_b, cp_b = np.array(f_list).max(), int(np.array(f_list).argmax())
+    results = np.array([_b_model(x_array, y_array, this_cp, SSE_null_b)
+                        for this_cp in range(iter_range[0], iter_range[1])])
+    fmax_b = results[:, 0].max()
     p_b = f_test(fmax_b, n_cases, model = 'b')
     if p_b < psig:
+        cp_b = int(results[:, 0].argmax())
         b_dict = {'ustar_th_b': x_array[cp_b + iter_range[0]]}
-        b_dict.update(dict(zip(['b0', 'b1'], stats_list[cp_b])))
+        b_dict.update(dict(zip(['b0', 'b1'], results[cp_b, 1:])))
     else:
         b_dict = {var: np.nan for var in ['ustar_th_b', 'b0', 'b1']}
 
@@ -486,6 +494,14 @@ def _get_bin_index(season_stats):
     n_per_bin = season_stats['n_per_bin']
     return np.tile(np.concatenate([np.tile(x, n_per_bin)
                                    for x in range(n_bins)]), 4)
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
+# def get_ds_from_nc(nc_path):
+
+#     ds = xr.open_dataset()
+
+#     return
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------

@@ -219,20 +219,65 @@ class change_point_detect(object):
 
 #------------------------------------------------------------------------------
 
-# #------------------------------------------------------------------------------
-# class change_point_detect_from_netcdf(change_point_detect):
+#------------------------------------------------------------------------------
+class change_point_detect_from_netcdf(change_point_detect):
 
-#     def __init__(self, dataframe, missing_data=-9999, names_dict=None,
-#                  insolation_threshold=10, minimum_annual_n=None,
-#                  write_to_nc_attrs=False):
-#         change_point_detect.__init__(self, dataframe, missing_data=-9999,
-#                                      names_dict=None, insolation_threshold=10,
-#                                      minimum_annual_n=None)
+    def __init__(self, nc_path, missing_data=-9999, names_dict=None,
+                 insolation_threshold=10, minimum_annual_n=None):
 
-#         self.ds = xr.open_dataset(dataframe)
-#         # dataframe = ds.to_dataframe()
-#         # dataframe.index = dataframe.index.droplevel([0,1])
-# #------------------------------------------------------------------------------
+        dataset = xr.open_dataset(nc_path)
+        dataframe = dataset.to_dataframe()
+        dataset.close()
+        dataframe.index = dataframe.index.droplevel([0, 1])
+        interval = int(''.join(([x for x in pd.infer_freq(dataframe.index)
+                                 if x.isdigit()])))
+        try: assert interval % 30 == 0
+        except AssertionError: raise RuntimeError(
+                'Unrecognised or non-continuous dataframe DateTime index')
+        if minimum_annual_n:
+            try: assert isinstance(minimum_annual_n, int)
+            except AssertionError: raise TypeError(
+                'Kwarg "minimum_annual_n" must be of type int')
+        if not names_dict:
+            self.external_names = _define_default_external_names()
+        else:
+            self.external_names = names_dict
+        self.df = utils.rename_df(dataframe, self.external_names,
+                                  _define_default_internal_names())
+        self.insolation_threshold = insolation_threshold
+        self.interval = interval
+        self.nc_path = nc_path
+        season_n = 1000 if interval == 30 else 600
+        if not minimum_annual_n: self.minimum_annual_n = 4 * season_n
+        self.missing_data=missing_data
+    #--------------------------------------------------------------------------
+
+    #--------------------------------------------------------------------------
+    def write_change_points_to_nc(self, n_trials):
+
+        df = self.get_change_points(n_trials)['summary_statistics']
+        ustar_str = (
+            ', '.join(
+            [': '.join([str(x),
+                        str(round(df.loc[df.Year==x, 'ustar_mean'].item(), 3))])
+             for x in df.Year])
+            )
+        ds = xr.open_dataset(self.nc_path)
+        ds.attrs['ustar_thresholds'] = ustar_str
+        dir_path = os.path.dirname(self.nc_path)
+        f_name = os.path.basename(self.nc_path)
+        out_file = (
+            os.path.join(dir_path,
+                         f_name.split('.')[0] + '_ustar.' + f_name.split('.')[1])
+            )
+        return ds.to_netcdf(out_file, format='NETCDF4')
+    #--------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
+
+
+
+#------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
 ### FUNCTIONS ###
@@ -348,7 +393,7 @@ def f_test(f_max, n, model):
            * n (int): size of sample
            * model (str): specify model used ('a' or 'b')"""
 
-    p = np.NaN
+    p = np.nan
     assert ~np.isnan(f_max)
     assert ~np.isnan(n)
     assert n > 10
@@ -623,7 +668,7 @@ def _null_b_model(y):
     return ((y - y.mean())**2).sum()
 #------------------------------------------------------------------------------
 
-#--------------------------------------------------------------------------
+#------------------------------------------------------------------------------
 def _write_to_file(data_dict, write_dir):
 
     """Write the returned results to an excel file"""
@@ -642,7 +687,7 @@ def _write_to_file(data_dict, write_dir):
             continue
         data_dict[key].to_excel(xlwriter, sheet_name=key, index=None)
     xlwriter.save()
-#--------------------------------------------------------------------------
+#------------------------------------------------------------------------------
 
 # #--------------------------------------------------------------------------
 # def plot_fit(df):

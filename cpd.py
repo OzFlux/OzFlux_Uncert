@@ -677,6 +677,8 @@ def _write_to_file(data_dict, write_dir):
     path_file = os.path.join(write_dir, 'change_points.xlsx')
     xlwriter = pd.ExcelWriter(path_file)
     for key in sorted(data_dict.keys()):
+        if key == 'summary_statistics':
+            data_dict[key].to_excel(xlwriter, sheet_name=key, index=None)
         if key == 'trial_results' or 'raw_results':
             df = data_dict[key]
             for year in df.Year.unique():
@@ -685,7 +687,6 @@ def _write_to_file(data_dict, write_dir):
                  .to_excel(xlwriter, sheet_name=str(year), index=None)
                  )
             continue
-        data_dict[key].to_excel(xlwriter, sheet_name=key, index=None)
     xlwriter.save()
 #------------------------------------------------------------------------------
 

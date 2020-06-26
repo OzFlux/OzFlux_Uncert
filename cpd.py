@@ -189,7 +189,7 @@ class change_point_detect(object):
                                       self.minimum_annual_n)
                     )
                 if  this_dict['sufficient_data'] == 'False':
-                    no_stats_dict.append(this_dict)
+                    no_stats_dict[str(year)] = this_dict
                     print('Insufficient valid data for year {}'
                           .format(str(year)))
                     continue

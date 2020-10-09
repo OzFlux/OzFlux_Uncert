@@ -156,8 +156,6 @@ class random_error(object):
                     for x in this_df['quantile_label'].unique().categories]
             return pd.DataFrame({'sigma_delta': sig_del, 'mean': mean})
 
-
-
         # if mode == 'day':
         df = self.get_differenced_time_series()
 

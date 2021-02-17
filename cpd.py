@@ -217,6 +217,27 @@ class change_point_detect(object):
             )
     #--------------------------------------------------------------------------
 
+#--------------------------------------------------------------------------
+    def plot_ustar_quick(self, year=None, num_cats=30, ustar_threshold=None):
+
+        """Get a quick and dirty plot of ustar"""
+
+        df = self.get_valid_df()
+        if year:
+            stats = self.get_season_stats(years=[year])[str(year)]
+            if not stats['sufficient_data'] == 'True':
+                if not stats['valid_n'] > num_cats:
+                    raise RuntimeError('Insufficient data for specified '
+                                       'quantiles! Exiting...')
+                print('Warning: only {} valid observations available!'
+                      .format(stats['valid_n']))
+            plot_ustar_threshold(df.loc[str(year)], num_cats=num_cats,
+                                 ustar_threshold=ustar_threshold)
+        else:
+            plot_ustar_threshold(df, num_cats=num_cats,
+                                 ustar_threshold=ustar_threshold)
+    #--------------------------------------------------------------------------
+
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
@@ -272,10 +293,6 @@ class change_point_detect_from_netcdf(change_point_detect):
             )
         return ds.to_netcdf(out_file, format='NETCDF4')
     #--------------------------------------------------------------------------
-
-#------------------------------------------------------------------------------
-
-
 
 #------------------------------------------------------------------------------
 
@@ -542,14 +559,6 @@ def _get_bin_index(season_stats):
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
-# def get_ds_from_nc(nc_path):
-
-#     ds = xr.open_dataset()
-
-#     return
-#------------------------------------------------------------------------------
-
-#------------------------------------------------------------------------------
 def _get_iter_range(n_cases):
 
     endpts_threshold = int(np.floor(n_cases * 0.05))
@@ -618,8 +627,16 @@ def _get_season_stats(df, freq, minimum_annual_n):
     n_per_bin = 5 if freq == 30 else 3
     season_n = 1000 if freq == 30 else 600
     total_n = len(df)
-    if total_n >= minimum_annual_n: sufficient_data = 'True'
-    else: sufficient_data = 'False'
+    stats_dict = {'valid_data': 'True', 'valid_n': total_n}
+    if not ((total_n >= minimum_annual_n) and (total_n >= season_n)):
+        stats_dict['sufficient_data'] = 'False'
+        nulls_dict = {
+            x: 0 for x in ['valid_n_incl', 'overlap_seasons', 'n_per_season',
+                           'n_per_Tclass', 'n_bins', 'n_per_bin']
+            }
+        stats_dict.update(nulls_dict)
+        return stats_dict
+    stats_dict['sufficient_data'] = 'True'
     standard_seasons = int(total_n / season_n)
     overlap_seasons = standard_seasons * 2 - 1
     remain = total_n % season_n
@@ -630,13 +647,13 @@ def _get_season_stats(df, freq, minimum_annual_n):
     n_per_season = season_n + extra_n_per_season
     n_per_Tclass = int(n_per_season / 4)
     n_bins = int(n_per_Tclass / n_per_bin)
-    return (
-        {'valid_data': 'True', 'sufficient_data': sufficient_data,
-         'valid_n': total_n, 'valid_n_incl': standard_seasons * n_per_season,
-         'overlap_seasons': overlap_seasons,
-         'n_per_season': n_per_season, 'n_per_Tclass': n_per_Tclass,
-         'n_bins': n_bins, 'n_per_bin': n_per_bin}
-        )
+    stats_dict['valid_n_incl'] = standard_seasons * n_per_season
+    stats_dict['overlap_seasons'] = overlap_seasons
+    stats_dict['n_per_season'] = n_per_season
+    stats_dict['n_per_Tclass'] = n_per_Tclass
+    stats_dict['n_bins'] = n_bins
+    stats_dict['n_per_bin'] = n_per_bin
+    return stats_dict
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
@@ -688,6 +705,39 @@ def _write_to_file(data_dict, write_dir):
                  )
             continue
     xlwriter.save()
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
+def plot_ustar_threshold(df, num_cats=30, ustar_threshold=None):
+
+    # Group by quantile and generate mean
+    df['ustar_cat'] = pd.qcut(df.ustar, num_cats,
+                              labels = np.linspace(1, num_cats, num_cats))
+    means_df = df.groupby('ustar_cat').mean()
+
+    # Plot
+    fig, ax1 = plt.subplots(1, figsize = (12, 8))
+    fig.patch.set_facecolor('white')
+    ax1.set_ylabel(r'$R_e\/(\mu mol\/m^{-2}\/s^{-1})$', fontsize = 18)
+    ax1.set_xlabel('$u_{*}\/(m\/s^{-1})$', fontsize = 18)
+    ax1.tick_params(axis = 'x', labelsize = 14)
+    ax1.tick_params(axis = 'y', labelsize = 14)
+    ax1.yaxis.set_ticks_position('left')
+    ax1.xaxis.set_ticks_position('bottom')
+    if ustar_threshold: ax1.axvline(ustar_threshold, color='black', lw=0.5)
+    ax1.plot(means_df.ustar, means_df.NEE, marker='o', mfc='None',
+            color = 'black', ls=':', label='Turbulent flux')
+    if 'Fc_storage' in df.columns:
+        ax1.plot(means_df.ustar, means_df.Fc_storage, marker='s', mfc='None',
+                color = 'black', ls='-.', label='Storage')
+        ax1.plot(means_df.ustar, means_df.NEE + means_df.Fc_storage,
+                marker = '^', mfc = '0.5', color = '0.5', label='Apparent NEE')
+        ax1.legend(frameon=False)
+    ax2 = ax1.twinx()
+    ax2.set_ylim([10,20])
+    ax2.tick_params(axis = 'y', labelsize = 14)
+    ax2.set_ylabel(r'$Temperature\/(^oC)$', fontsize = 18)
+    ax2.plot(means_df.ustar, means_df.Ta)
 #------------------------------------------------------------------------------
 
 # #--------------------------------------------------------------------------

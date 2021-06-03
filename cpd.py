@@ -90,12 +90,14 @@ class change_point_detect(object):
 
         if not resample: n_trials = 1
         if write_to_dir: _check_path_exists(write_to_dir)
-        df_list = []
-        year_stats = self.get_season_stats(years=years, valid_years_only=True)
-        if not year_stats: return
+        stats = self.get_season_stats(years=years)
         print('Getting change points for year:')
-        for year in year_stats.keys():
-            print('    {}'.format(year), end=' ')
+        df_list = []
+        for year in stats.index:
+            if not stats.loc[year, 'sufficient_data']: 
+                print('    {}: insufficient data... skipping!'.format(year))
+                continue
+            print('    {}'.format(year), end=' ')           
             trials_list = []
             print('- running trial #', end=' ')
             for trial in range(n_trials):
@@ -111,7 +113,7 @@ class change_point_detect(object):
         if len(df_list) == 0: return
         years_df = pd.concat(df_list)
         if do_cross_sample_qc:
-            output_dict = _cross_sample_stats_QC(years_df)
+            output_dict = _cross_sample_stats_QC(years_df, stats.index.tolist())
             if write_to_dir: _write_to_file(output_dict, write_to_dir)
             return output_dict
         if write_to_dir:
@@ -135,14 +137,13 @@ class change_point_detect(object):
         """
 
         year_stats = self.get_season_stats(years=years, valid_years_only=True)
-        if not year_stats: return
+        if not len(year_stats): return
         df_list = []
-        for this_year in year_stats.keys():
-            str_year = str(this_year)
-            this_df = self.get_valid_df().loc[str_year]
+        for this_year in year_stats.index:
+            this_df = self.get_valid_df().loc[this_year]
             if resample: this_df = get_resampled_data(this_df)
             season_df = _get_season_data(df=this_df,
-                                         stats_dict=year_stats[str_year])
+                                         stats_df=year_stats.loc[this_year])
             season_df['Year'] = int(this_year)
             df_list.append(
                 season_df.set_index('Year', append=True)
@@ -152,7 +153,7 @@ class change_point_detect(object):
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
-    def get_season_stats(self, years=None, valid_years_only=False):
+    def get_season_stats(self, years=None, valid_years_only=False) -> dict:
 
         """Get statistics of data availability for each year
            Args:
@@ -167,41 +168,24 @@ class change_point_detect(object):
                  year)
         """
 
-        data_years = self.df.index.year.unique().tolist()
+        data_years = [str(x) for x in self.df.index.year.unique()]
         if years:
-            try: assert isinstance(years, list)
-            except AssertionError:
+            if not isinstance(years, list):
                 raise TypeError("'years' parameter must be of type list")
-            years_list = list(filter(lambda x: x in data_years,
-                                     [int(y) for y in years]))
-            if len(years_list) == 0:
+            years_list = [str(x) for x in years if str(x) in data_years]
+            if not years_list:
                 raise KeyError("None of years in list are contained in "
                                "supplied data")
         else:
             years_list = data_years
         valid_df = self.get_valid_df()
-        stats_dict = {}
-        no_stats_dict = {}
-        for year in years_list:
-            try:
-                this_dict = (
-                    _get_season_stats(valid_df.loc[str(year)], self.interval,
-                                      self.minimum_annual_n)
-                    )
-                if  this_dict['sufficient_data'] == 'False':
-                    no_stats_dict[str(year)] = this_dict
-                    print('Insufficient valid data for year {}'
-                          .format(str(year)))
-                    continue
-                stats_dict[str(year)] = this_dict
-            except KeyError:
-                no_stats_dict[str(year)] = {'valid_data': 'False'}
-                print('No valid data for year {}'.format(str(year)))
-        if valid_years_only:
-            if len(stats_dict) == 0: return
-            return stats_dict
-        stats_dict.update(no_stats_dict)
-        return {x: stats_dict[x] for x in sorted(stats_dict.keys())}
+        stats_df = pd.DataFrame(
+            {year: _get_season_stats(valid_df.loc[str(year)], 
+                                     self.interval, 
+                                     self.minimum_annual_n)
+             for year in sorted(years_list)}).T
+        if valid_years_only: return stats_df.loc[stats_df.sufficient_data]
+        return stats_df
     #--------------------------------------------------------------------------
 
     #--------------------------------------------------------------------------
@@ -210,7 +194,7 @@ class change_point_detect(object):
         """Return a dataframe of all valid nocturnal data records"""
 
         return (
-            self.df.loc[(self.df.Fsd < 10) &
+            self.df.loc[(self.df.Fsd < self.insolation_threshold) &
                         (self.df.ustar < 3), ['NEE', 'Ta', 'ustar']]
             .replace(self.missing_data, np.nan)
             .dropna()
@@ -225,7 +209,7 @@ class change_point_detect(object):
         df = self.get_valid_df()
         if year:
             stats = self.get_season_stats(years=[year])[str(year)]
-            if not stats['sufficient_data'] == 'True':
+            if not stats['sufficient_data']:
                 if not stats['valid_n'] > num_cats:
                     raise RuntimeError('Insufficient data for specified '
                                        'quantiles! Exiting...')
@@ -337,15 +321,15 @@ def _check_path_exists(path):
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
-def _cross_sample_stats_QC(df):
+def _cross_sample_stats_QC(df, years):
 
     """Calculate the cross-sample statistics for bootstrapped fit results"""
 
-    years = df.Year.unique()
     stats_list = []
     trials_list = []
     for year in years:
-        year_df = df.loc[df.Year == year]
+        pdb.set_trace()
+        year_df = df.loc[df.Year == int(year)]
         d_mode = len(df.loc[df.b1 > 0, 'b1'])
         e_mode = len(df.loc[df.b1 < 0, 'b1'])
         if e_mode > d_mode:
@@ -386,7 +370,7 @@ def _cross_sample_stats_QC(df):
 #------------------------------------------------------------------------------
 def _define_default_external_names():
 
-    return {'flux_name': 'Fc',
+    return {'flux_name': 'Fco2',
             'temperature_name': 'Ta',
             'insolation_name': 'Fsd',
             'friction_velocity_name': 'ustar'}
@@ -550,10 +534,10 @@ def _fit_season_data(seasons_df):
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
-def _get_bin_index(season_stats):
+def _get_bin_index(stats_df):
 
-    n_bins = season_stats['n_bins']
-    n_per_bin = season_stats['n_per_bin']
+    n_bins = stats_df.n_bins
+    n_per_bin = stats_df.n_per_bin
     return np.tile(np.concatenate([np.tile(x, n_per_bin)
                                    for x in range(n_bins)]), 4)
 #------------------------------------------------------------------------------
@@ -577,16 +561,16 @@ def get_resampled_data(df):
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
-def _get_season_data(df, stats_dict):
+def _get_season_data(df, stats_df):
 
     # Extract overlapping series to individual dataframes, for each of
     # which: # 1) sort by temperature; 2) create temperature class;
     # 3) sort temperature class by u*; 4) add bin numbers to each class,
     # then; 5) concatenate
-    df = df.iloc[:stats_dict['valid_n_incl']]
-    season_index = _get_season_index(stats_dict)
-    T_index = _get_Tclass_index(stats_dict)
-    bin_index = _get_bin_index(stats_dict)
+    df = df.iloc[:stats_df['valid_n_incl']]
+    season_index = _get_season_index(stats_df)
+    T_index = _get_Tclass_index(stats_df)
+    bin_index = _get_bin_index(stats_df)
     seasons_lst = []
     for season in np.unique(season_index)[:-1]:
         this_df = (
@@ -627,16 +611,17 @@ def _get_season_stats(df, freq, minimum_annual_n):
     n_per_bin = 5 if freq == 30 else 3
     season_n = 1000 if freq == 30 else 600
     total_n = len(df)
-    stats_dict = {'valid_data': 'True', 'valid_n': total_n}
+    valid_data = True if total_n else False
+    stats_dict = {'valid_data': valid_data, 'valid_n': total_n}
     if not ((total_n >= minimum_annual_n) and (total_n >= season_n)):
-        stats_dict['sufficient_data'] = 'False'
+        stats_dict['sufficient_data'] = False
         nulls_dict = {
             x: 0 for x in ['valid_n_incl', 'overlap_seasons', 'n_per_season',
                            'n_per_Tclass', 'n_bins', 'n_per_bin']
             }
         stats_dict.update(nulls_dict)
         return stats_dict
-    stats_dict['sufficient_data'] = 'True'
+    stats_dict['sufficient_data'] = True
     standard_seasons = int(total_n / season_n)
     overlap_seasons = standard_seasons * 2 - 1
     remain = total_n % season_n
@@ -657,18 +642,18 @@ def _get_season_stats(df, freq, minimum_annual_n):
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
-def _get_season_index(season_stats):
+def _get_season_index(stats_df):
 
-    n_per_season = season_stats['n_per_season']
-    n_seasons = season_stats['overlap_seasons']
+    n_per_season = stats_df.n_per_season
+    n_seasons = stats_df.overlap_seasons
     return np.concatenate([np.tile(i, int(n_per_season / 2))
                                    for i in range(n_seasons + 1)])
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
-def _get_Tclass_index(season_stats):
+def _get_Tclass_index(stats_df):
 
-    n_per_Tclass = season_stats['n_per_Tclass']
+    n_per_Tclass = stats_df.n_per_Tclass
     return np.concatenate([np.tile(x, n_per_Tclass) for x in range(4)])
 #------------------------------------------------------------------------------
 

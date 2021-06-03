@@ -2,7 +2,6 @@
 
 # Python modules
 import matplotlib.pyplot as plt
-import matplotlib.mlab as mlab
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -50,15 +49,7 @@ class change_point_detect(object):
     def __init__(self, dataframe, missing_data=-9999, names_dict=None,
                  insolation_threshold=10, minimum_annual_n=None):
 
-        interval = int(''.join(([x for x in pd.infer_freq(dataframe.index)
-                                 if x.isdigit()])))
-        try: assert interval % 30 == 0
-        except AssertionError: raise RuntimeError(
-                'Unrecognised or non-continuous dataframe DateTime index')
-        if minimum_annual_n:
-            try: assert isinstance(minimum_annual_n, int)
-            except AssertionError: raise TypeError(
-                'Kwarg "minimum_annual_n" must be of type int')
+        self.interval = _check_continuity(dataframe.index)
         if not names_dict:
             self.external_names = _define_default_external_names()
         else:
@@ -66,9 +57,9 @@ class change_point_detect(object):
         self.df = utils.rename_df(dataframe, self.external_names,
                                   _define_default_internal_names())
         self.insolation_threshold = insolation_threshold
-        self.interval = interval
-        season_n = 1000 if interval == 30 else 600
+        season_n = 1000 if self.interval == 30 else 600
         if not minimum_annual_n: self.minimum_annual_n = 4 * season_n
+        else: self.minimum_annual_n = minimum_annual_n
         self.missing_data=missing_data
 #------------------------------------------------------------------------------
 
@@ -234,15 +225,7 @@ class change_point_detect_from_netcdf(change_point_detect):
         dataframe = dataset.to_dataframe()
         dataset.close()
         dataframe.index = dataframe.index.droplevel([0, 1])
-        interval = int(''.join(([x for x in pd.infer_freq(dataframe.index)
-                                 if x.isdigit()])))
-        try: assert interval % 30 == 0
-        except AssertionError: raise RuntimeError(
-                'Unrecognised or non-continuous dataframe DateTime index')
-        if minimum_annual_n:
-            try: assert isinstance(minimum_annual_n, int)
-            except AssertionError: raise TypeError(
-                'Kwarg "minimum_annual_n" must be of type int')
+        self.interval = _check_continuity(dataframe.index)
         if not names_dict:
             self.external_names = _define_default_external_names()
         else:
@@ -250,9 +233,8 @@ class change_point_detect_from_netcdf(change_point_detect):
         self.df = utils.rename_df(dataframe, self.external_names,
                                   _define_default_internal_names())
         self.insolation_threshold = insolation_threshold
-        self.interval = interval
         self.nc_path = nc_path
-        season_n = 1000 if interval == 30 else 600
+        season_n = 1000 if self.interval == 30 else 600
         if not minimum_annual_n: self.minimum_annual_n = 4 * season_n
         self.missing_data=missing_data
     #--------------------------------------------------------------------------
@@ -314,6 +296,18 @@ def _b_model(x, y, cp, null_SSE):
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
+def _check_continuity(index):
+
+    freq_dict = {'30T': 30, 'H': 60}
+    interval = pd.infer_freq(index)
+    if not interval in freq_dict:
+        raise RuntimeError(
+            'Unrecognised or non-continuous dataframe DateTime index'
+            )
+    return freq_dict[interval]
+#------------------------------------------------------------------------------
+
+#------------------------------------------------------------------------------
 def _check_path_exists(path):
 
     try: assert os.path.isdir(path)
@@ -328,7 +322,6 @@ def _cross_sample_stats_QC(df, years):
     stats_list = []
     trials_list = []
     for year in years:
-        pdb.set_trace()
         year_df = df.loc[df.Year == int(year)]
         d_mode = len(df.loc[df.b1 > 0, 'b1'])
         e_mode = len(df.loc[df.b1 < 0, 'b1'])
@@ -370,7 +363,7 @@ def _cross_sample_stats_QC(df, years):
 #------------------------------------------------------------------------------
 def _define_default_external_names():
 
-    return {'flux_name': 'Fco2',
+    return {'flux_name': 'Fc',
             'temperature_name': 'Ta',
             'insolation_name': 'Fsd',
             'friction_velocity_name': 'ustar'}
@@ -479,7 +472,7 @@ def fit_function(data_array, psig=0.05):
     x_array, y_array = data_array[:, 0], data_array[:, 1]
     n_cases = len(data_array)
     iter_range = _get_iter_range(n_cases)
-    results_dict = {}
+    # results_dict = {}
 
     # Calculate null model SSE for operational (b) and diagnostic (a) model
     SSE_null_b = _null_b_model(y_array)
@@ -492,7 +485,7 @@ def fit_function(data_array, psig=0.05):
     results = np.array([_a_model(x_array, y_array, this_cp, SSE_null_a)
                         for this_cp in range(iter_range[0], iter_range[1])])
     fmax_a = results[:, 0].max()
-    p_a = f_test(fmax_a, n_cases, model = 'a')
+    p_a = f_test(fmax_a, n_cases, model='a')
     if p_a < psig:
         cp_a = int(results[:, 0].argmax())
         a_dict = {'ustar_th_a': x_array[cp_a + iter_range[0]]}
@@ -504,7 +497,7 @@ def fit_function(data_array, psig=0.05):
     results = np.array([_b_model(x_array, y_array, this_cp, SSE_null_b)
                         for this_cp in range(iter_range[0], iter_range[1])])
     fmax_b = results[:, 0].max()
-    p_b = f_test(fmax_b, n_cases, model = 'b')
+    p_b = f_test(fmax_b, n_cases, model='b')
     if p_b < psig:
         cp_b = int(results[:, 0].argmax())
         b_dict = {'ustar_th_b': x_array[cp_b + iter_range[0]]}
@@ -512,10 +505,13 @@ def fit_function(data_array, psig=0.05):
     else:
         b_dict = {var: np.nan for var in ['ustar_th_b', 'b0', 'b1']}
 
-    results_dict.update(a_dict)
-    results_dict.update(b_dict)
+    a_dict.update(b_dict); return a_dict
+    
+    # results_dict.update(a_dict)
+    # results_dict.update(b_dict)
+    # pdb.set_trace()
 
-    return results_dict
+    # return results_dict
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------

@@ -310,8 +310,7 @@ def _check_continuity(index):
 #------------------------------------------------------------------------------
 def _check_path_exists(path):
 
-    try: assert os.path.isdir(path)
-    except AssertionError: raise FileNotFoundError('Invalid path!')
+    if not os.path.isdir(path): raise FileNotFoundError('Invalid path!')
 #------------------------------------------------------------------------------
 
 #------------------------------------------------------------------------------
